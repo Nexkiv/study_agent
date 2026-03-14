@@ -12,6 +12,34 @@ Key features:
 - Generate flashcards → structured LLM outputs with term/definition pairs
 - Export to Quizlet/Anki → deterministic CSV formatting
 
+## Phase Status
+
+**✅ Phase 1 - Foundation (COMPLETE)**
+- SQLite database schema with all tables
+- ChromaDB initialization
+- File upload infrastructure with validation
+- Gradio MVP interface (3-panel layout)
+- Configuration management (.env, config.py)
+- All ORM models created and tested
+- Course files (run_agent.py, tools.py, usage.py) integrated
+
+**🚧 Phase 2 - Ingestion Pipeline (TODO)**
+- PDF text extraction
+- Text chunking (800 tokens, 150 overlap)
+- Embedding generation
+- ChromaDB vector storage
+
+**🚧 Phase 3 - RAG Chat Agent (TODO)**
+- Tool use implementation (search + code execution)
+- Agent loop with Anthropic Claude
+- Chat history persistence
+- Usage tracking (re-enable usage.py)
+
+**🚧 Phase 4 - Flashcard Generation (TODO)**
+- OpenAI Structured Outputs
+- CSV export for Quizlet/Anki
+- Artwork image fetching (post-MVP)
+
 ## Architecture Philosophy
 
 The codebase is split into two explicit layers:
@@ -34,44 +62,77 @@ This architectural split is intentional and should be preserved — it demonstra
 ```
 study_agent/
 ├── app/
-│   ├── __init__.py              # Flask factory
-│   ├── config.py                # API keys, DB paths
-│   ├── extensions.py            # SQLAlchemy + ChromaDB init
-│   ├── models/                  # SQLAlchemy ORM models
+│   ├── __init__.py              # Package initialization ✅
+│   ├── config.py                # API keys, DB paths, constants ✅
+│   ├── extensions.py            # SQLAlchemy + ChromaDB init ✅
+│   │
+│   ├── models/                  # SQLAlchemy ORM models ✅
+│   │   ├── __init__.py
+│   │   ├── class_model.py       # Class container
+│   │   ├── input_model.py       # Uploaded materials
+│   │   ├── flashcard_model.py   # Generated flashcards
+│   │   ├── quiz_model.py        # Generated quizzes
+│   │   └── chat_model.py        # Conversation history
+│   │
 │   ├── pipelines/               # ⚡ DETERMINISTIC LAYER
-│   │   ├── ingestion.py         # File routing + extraction
-│   │   ├── ocr.py               # Mathpix + Claude vision
-│   │   ├── transcription.py     # Whisper wrapper
-│   │   ├── chunking.py          # Text splitting + embedding
-│   │   ├── artwork_images.py    # Public domain image fetching
-│   │   └── exporters.py         # CSV/TSV for Quizlet/Anki
+│   │   ├── __init__.py          ✅
+│   │   ├── ingestion.py         # Phase 2: File routing + extraction
+│   │   ├── chunking.py          # Phase 2: Text splitting + embedding
+│   │   └── exporters.py         # Phase 4: CSV/TSV export
+│   │
 │   ├── agents/                  # 🤖 AGENTIC LAYER
-│   │   ├── chat_agent.py        # RAG + code-as-tool
-│   │   ├── study_agent.py       # Flashcard/quiz generation
-│   │   ├── tools.py             # Tool definitions + dispatch
-│   │   └── sandbox.py           # Code execution sandbox
-│   ├── routes/                  # Flask Blueprints
-│   ├── templates/
-│   └── static/
+│   │   ├── __init__.py          ✅
+│   │   ├── run_agent.py         # Agent execution loop (from course) ✅
+│   │   ├── tools.py             # ToolBox class (from course) ✅
+│   │   ├── chat_agent.py        # Phase 3: RAG + tool use
+│   │   └── study_agent.py       # Phase 4: Flashcard generation
+│   │
+│   ├── utils/                   # Utility functions ✅
+│   │   ├── __init__.py
+│   │   ├── usage.py             # Cost tracking (deferred to Phase 3)
+│   │   └── file_handler.py      # File upload handling ✅
+│   │
+│   ├── routes/                  # Flask Blueprints (post-MVP)
+│   ├── templates/               # Jinja2 templates (post-MVP)
+│   └── static/                  # CSS/JS assets (post-MVP)
+│
 ├── data/
-│   ├── uploads/                 # User-uploaded files
-│   ├── app.db                   # SQLite metadata
-│   └── chroma/                  # ChromaDB vector store
+│   ├── uploads/                 # User-uploaded files ✅
+│   │   └── {class_id}/          # Organized by class
+│   ├── app.db                   # SQLite metadata ✅
+│   └── chroma/                  # ChromaDB vector store ✅
+│
+├── init_db.py                   # Database initialization script ✅
+├── gradio_app.py                # Gradio MVP interface ✅
+├── requirements.txt             # Python dependencies ✅
+├── .env.example                 # Environment template ✅
+├── .env                         # API keys (not committed) ✅
+└── .gitignore                   # Git ignore rules ✅
 ```
+
+**Legend:** ✅ = Implemented in Phase 1
 
 ## Tech Stack
 
-| Component | Technology | Notes |
-|-----------|-----------|-------|
-| Backend | Flask + SQLAlchemy | Python-native, modular with Blueprints |
-| Metadata DB | SQLite | Zero-config, single-file database |
-| Vector DB | ChromaDB | One collection per class, in-process |
-| LLM APIs | OpenAI + Anthropic | OpenAI for structured outputs, Claude for tool use |
-| Math OCR | Mathpix API | Handles equations, diagrams, STEM content |
-| Audio | OpenAI Whisper | Lecture recording transcription |
-| Embeddings | text-embedding-3-small | Fast, cost-effective |
-| Frontend (MVP) | Gradio Blocks | Rapid prototyping |
-| Frontend (v2) | Tailwind CSS + HTMX | Production UI, no React needed |
+| Component | Technology | Version | Notes |
+|-----------|-----------|---------|-------|
+| Backend | Flask + SQLAlchemy | Flask 3.0.0, SQLAlchemy 3.1.1 | Python-native, modular with Blueprints |
+| Metadata DB | SQLite | Built-in | Zero-config, single-file database |
+| Vector DB | ChromaDB | ≥0.5.0 | One collection per class, NumPy 2.0 compatible |
+| LLM APIs | OpenAI + Anthropic | openai 1.51.0, anthropic 0.40.0 | OpenAI for structured outputs, Claude for tool use |
+| Math OCR | Mathpix API | Post-MVP | Handles equations, diagrams, STEM content |
+| Audio | OpenAI Whisper | Post-MVP | Lecture recording transcription |
+| Embeddings | text-embedding-3-small | Phase 2 | Fast, cost-effective |
+| Frontend (MVP) | Gradio Blocks | ≥5.0.0 | Rapid prototyping, compatible with modern huggingface_hub |
+| Frontend (v2) | Tailwind CSS + HTMX | Post-MVP | Production UI, no React needed |
+| Python | Python 3.12 | 3.12+ | Virtual environment required |
+
+### Compatibility Notes
+
+- **ChromaDB 0.5.0+**: Required for NumPy 2.0 compatibility. Earlier versions fail on `np.float_` removal.
+- **Gradio 5.x**: Chatbot message format changed to dict with `role`/`content` keys (not lists).
+- **PyYAML ≥6.0.1**: Version 6.0 has build issues with Python 3.12. Use 6.0.1+ for pre-built wheels.
+- **usage.py**: Deferred to Phase 3. OpenAI import path needs updating for current library version.
 
 ## Database Schema
 
@@ -339,12 +400,33 @@ Post-MVP: Quiz generation, reflection loop, artwork image fetching, multi-class 
 
 ## Development Commands
 
-Since the codebase is still in design phase, these will be added as development progresses:
+**Setup (one-time):**
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-- TBD: Run development server
-- TBD: Initialize database
-- TBD: Run tests
-- TBD: Generate embeddings for uploaded files
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file from template
+cp .env.example .env
+# Edit .env and add your API keys
+
+# Initialize database
+python init_db.py
+```
+
+**Run the application:**
+```bash
+source venv/bin/activate  # Activate virtual environment
+python gradio_app.py      # Launch Gradio UI at http://127.0.0.1:7860
+```
+
+**Testing (Phase 2+):**
+```bash
+pytest  # Run tests
+```
 
 ## API Keys Required
 
@@ -381,6 +463,32 @@ The key insight: Everything else (file routing, OCR, transcription, chunking, em
 
 - **Preserve the architectural split**: Keep `pipelines/` (deterministic) and `agents/` (agentic) separate. This is a core design principle, not just organization.
 - **Art history focus for MVP**: Don't try to support multiple domains initially. The domain specialization in prompts and flashcard formats is intentional.
-- **Start with Gradio, migrate to Flask**: The MVP uses Gradio for rapid prototyping. Flask + Tailwind CSS is the post-MVP production version.
+- **Gradio MVP**: Using Gradio 5.x for rapid prototyping. Flask + Tailwind CSS is the post-MVP production version.
 - **Code execution is post-MVP**: The `execute_python` tool is only needed when expanding to CS content that requires computation.
-- **Cost tracking**: Use `usage.py` pattern from course materials to track LLM API costs during development.
+- **Virtual environment required**: Always activate venv before running commands. Dependencies are isolated from system Python.
+- **Usage tracking deferred**: `usage.py` from course materials needs OpenAI import path update. Will be re-enabled in Phase 3.
+
+## Starting Phase 2
+
+When ready to implement the ingestion pipeline:
+
+1. **Files to create:**
+   - `app/pipelines/ingestion.py` - File routing and text extraction
+   - `app/pipelines/chunking.py` - Text splitting and embedding
+
+2. **Dependencies already installed:**
+   - `pypdf` for PDF text extraction
+   - `python-docx` for DOCX support
+   - `langchain-text-splitters` for chunking
+   - `openai` for embedding API
+
+3. **Key integration points:**
+   - Update `gradio_app.py` `upload_file()` to call ingestion pipeline
+   - Populate `Input.raw_text` field during extraction
+   - Use `get_or_create_collection()` from extensions.py
+   - Store chunks with metadata: `source`, `chunk_idx`
+
+4. **Configuration already set:**
+   - `CHUNK_SIZE = 800`
+   - `CHUNK_OVERLAP = 150`
+   - `EMBEDDING_MODEL = 'text-embedding-3-small'`
