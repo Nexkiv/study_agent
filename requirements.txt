@@ -1,0 +1,26 @@
+# Core Framework
+flask==3.0.0
+flask-sqlalchemy==3.1.1
+
+# Database
+chromadb>=0.5.0
+
+# LLM APIs
+openai==1.51.0
+anthropic==0.40.0
+
+# Text Processing
+pypdf==4.0.0
+python-docx==1.1.0
+langchain-text-splitters==0.3.0
+
+# UI (MVP - Gradio)
+gradio>=5.0.0
+
+# Utilities
+python-dotenv==1.0.0
+pydantic==2.9.0
+pyyaml>=6.0.1
+
+# Development
+pytest==8.0.0

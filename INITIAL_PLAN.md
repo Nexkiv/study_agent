@@ -379,6 +379,76 @@ This pattern matches the YAML-based structured output configs from Lecture 3a. T
 
 ---
 
+## Artwork Image Fetching (Deterministic, Art History Enhancement)
+
+**The Problem**: Art history flashcards without images are significantly less effective, since the whole skill being tested is visual recognition. Text-only flashcards miss the core learning objective.
+
+**The Solution**: Most artworks taught in undergrad art history surveys (Renaissance, Baroque, Gothic, etc.) are centuries old and their images are fully in the public domain. Several museums publish free APIs specifically for this.
+
+### Public Domain Art APIs
+
+| API                          | Collection                 | Cost | Key Required |
+| ---------------------------- | -------------------------- | ---- | ------------ |
+| **Wikimedia Commons**        | Virtually everything       | Free | No           |
+| **Met Museum Open Access**   | 400K+ works                | Free | No           |
+| **Art Institute of Chicago** | 100K+ works                | Free | No           |
+| **Europeana**                | European cultural heritage | Free | Yes (free)   |
+
+This means flashcard image fetching is a **deterministic pipeline step**, not an agentic one — just a function call with the artwork title:
+
+```python
+import requests
+
+def fetch_artwork_image(title: str, artist: str) -> str | None:
+    """Deterministically fetch a public domain artwork image URL."""
+    # Try Wikimedia Commons first
+    search_url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "titles": f"{title}",
+        "prop": "pageimages",
+        "pithumbsize": 400,
+        "format": "json"
+    }
+    response = requests.get(search_url, params=params).json()
+    pages = response["query"]["pages"]
+    for page in pages.values():
+        if "thumbnail" in page:
+            return page["thumbnail"]["source"]
+
+    # Fallback: Met Museum API
+    search = requests.get(
+        f"https://collectionapi.metmuseum.org/public/collection/v1/search",
+        params={"q": f"{title} {artist}", "hasImages": True}
+    ).json()
+    if search["total"] > 0:
+        obj_id = search["objectIDs"][0]
+        obj = requests.get(
+            f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}"
+        ).json()
+        return obj.get("primaryImageSmall")
+
+    return None  # Fall back to text-only card
+```
+
+### How It Fits the Architecture
+
+When the LLM generates a flashcard with a structured output like `{"term": "Portinari Altarpiece", "definition": "Hugo van der Goes, c.1475..."}`, the ingestion pipeline immediately tries to attach an image:
+
+```
+LLM generates flashcard → deterministic image fetch → store URL in SQLite
+```
+
+The flashcard then renders with the image on one side and the term/definition on the other. If no image is found, it gracefully falls back to text-only — so the feature never breaks the app.
+
+### Why This Is Better Than Your Professor's Slides
+
+Your professor's slides are low-res JPEGs in a PDF. Wikimedia Commons and the Met API return high-resolution, properly lit, color-accurate images — often better than what you'd see in class.
+
+This is a strong **post-MVP feature** but it's simple enough (one deterministic function, no new agent logic) that it could slot into Phase 4 alongside flashcard generation with minimal extra effort.
+
+---
+
 ## Post-MVP: Code-as-Tool (CS Domain Expansion)
 
 When expanding to computer science, the agent gains a **code execution tool** — instead of reasoning about math/code in text, it writes and runs Python for deterministic results. This is a post-MVP feature since art history doesn't need computation. It's documented in the Agentic Layer section above for when you're ready to add it.[^23][^25]
@@ -415,6 +485,7 @@ CREATE TABLE flashcards (
     input_id    INTEGER REFERENCES inputs(id) ON DELETE SET NULL,
     term        TEXT NOT NULL,
     definition  TEXT NOT NULL,
+    image_url   TEXT,                 -- public domain artwork image (optional)
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -484,6 +555,7 @@ study_agent/
 │   │   ├── ocr.py               # Mathpix + Claude vision wrappers
 │   │   ├── transcription.py     # Whisper wrapper
 │   │   ├── chunking.py          # Text splitting + embedding
+│   │   ├── artwork_images.py    # Public domain image fetching
 │   │   └── exporters.py         # CSV/TSV for Quizlet/Anki
 │   │
 │   ├── agents/                  # 🤖 AGENTIC LAYER
@@ -903,7 +975,7 @@ That's it. Five features. One page. One class at a time.
 
 29. [Constrained Decoding](https://openai.com/index/introducing-structured-outputs-in-the-api/) - We are introducing Structured Outputs in the API—model outputs now reliably adhere to developer-supp...
 
-30. [CLAUDE.md](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/103517313/60a5849a-21ca-4bef-a83f-4d50a998bfeb/CLAUDE.md?AWSAccessKeyId=ASIA2F3EMEYE3DXJN23K&Signature=nYzkDK0mr2C9Od9yk9bf7wuuhAI%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEM%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLWVhc3QtMSJIMEYCIQCHKdJPu3fRdrpyCD5ku21gnKuIW3M%2BjiGP8KCsw6pQNgIhAITX4kIx%2BuvE4NHF5IR%2FPrj8xwu%2FXfU1EpvrNzNqgbV3KvwECJj%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEQARoMNjk5NzUzMzA5NzA1Igz7D5Dfiw95rYOvKoAq0ASaAEhhG%2Fji%2Fb04bjmdnIC5SszOtBDDn8Xcq7DUthDZxe1mPH9%2BVWfNEM9eUW9i43z%2BNLBwnHf8fX2KTnRsKoLwD9dm1%2BbQ%2FyAipvIzERMuG7uplkY4ot9KgG5%2FnbkKJEmtylOr9jBa%2B3Coqdjgr%2FOZsklhrOiM3o7XdE966NO0j%2Bk7l9WMlLgNsMznTHHSCj3tkcNY8M5hBkkn9RAXaE73qLHQdfN20SyW50HTI%2BDuwE%2B7x6Xaz9Oh1%2FskII95k21iUqK5K3YtEMi2LFAShwCxzNuMPulbF8xNLzS2GJyiXDVfBmdyfH%2FTISGttcbXuvb78yX16RqzMylvvyDu9DBcB8ZhlOq0IPeVqJbjDcz7n5I70dBsW5I6xAFallfr0cQUxZPy6qrlfjfbWuwenW0fLyctxk9lPlo1ovuKRU%2B9ioxodaf%2B9NQAjDkzWb836cToJ9kmwYb%2BB0m4vE%2Br6ND1Z0XPc%2Fu3KwnbBxfRhlqj%2BNttq6Rsss1W2EMfczXAabVa1WHnD1Z85YbUR9tIG5MbMkHNekOpb8E6pbScqA%2FtvmAy824aEKX8%2FVNLHHQH3%2FC76RQIVgiR2%2BOpa022RqZyzUJ4BkWTdV7cUSblrHcpZ4XcSrMzkDwdb1BG3vn6NgUrk60jC66x3zJATRSNWTrbUlPjL%2ByfFRT95OLeSCNJynaNDZbdg437Lli4XTHMWd6AZv1SFbysIZNc49mOIRx6xrw8t0hzQMZ6pC4Zt2w9VMuK8AffkLeTMtKy1IO4Z4p4h0Xpf02DJaUy3N%2BAOrtVMNGq0s0GOpcB%2BpXVAtVrnIZpQNeMr7ky37WEn%2Fc0ra5szbbd3B5veynzPeCWtIpxUus%2FP2UithSfyOpTGTAf21RXN0AcPZYC4TyxAWYdFs9YuvCDQOjnYHW2Wirtn1111pX%2FROYKGJ44Qw7fJLcDkJSgls2D1nZ6oLhj9a1BC07L1mJJIohx6wIOTQXtuomy%2F6cgTAHcKa7zJB7PcWCFIg%3D%3D&Expires=1773446370) - # CLAUDE.md This file provides guidance to Claude Code (claude.ai/code) when working with code in t...
+30. [CLAUDE.md](uloaded to perplexity) - # CLAUDE.md This file provides guidance to Claude Code (claude.ai/code) when working with code in t...
 
 31. [Design Patterns for Effective AI Agents - AI Changes Everything](https://patmcguinness.substack.com/p/design-patterns-for-effective-ai) - Anthropic gives advice on building AI Agents. Simple workflows connecting capable tools and advanced...
 

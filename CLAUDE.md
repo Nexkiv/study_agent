@@ -43,6 +43,7 @@ study_agent/
 │   │   ├── ocr.py               # Mathpix + Claude vision
 │   │   ├── transcription.py     # Whisper wrapper
 │   │   ├── chunking.py          # Text splitting + embedding
+│   │   ├── artwork_images.py    # Public domain image fetching
 │   │   └── exporters.py         # CSV/TSV for Quizlet/Anki
 │   ├── agents/                  # 🤖 AGENTIC LAYER
 │   │   ├── chat_agent.py        # RAG + code-as-tool
@@ -100,6 +101,7 @@ CREATE TABLE flashcards (
     input_id INTEGER REFERENCES inputs(id),
     term TEXT NOT NULL,
     definition TEXT NOT NULL,
+    image_url TEXT,                   -- public domain artwork image (optional)
     created_at TIMESTAMP
 );
 
@@ -251,6 +253,60 @@ def execute_python_sandboxed(code: str) -> str:
 
 For production, consider Docker isolation or Pyodide (Python in WebAssembly).
 
+### 5. Artwork Image Fetching (Deterministic)
+
+**Problem**: Art history flashcards without images are significantly less effective, since visual recognition is the core skill being tested.
+
+**Solution**: Most artworks in art history surveys are public domain. Free museum APIs provide high-quality images:
+
+```python
+import requests
+
+def fetch_artwork_image(title: str, artist: str) -> str | None:
+    """Deterministically fetch a public domain artwork image URL."""
+    # Try Wikimedia Commons first
+    search_url = "https://en.wikipedia.org/w/api.php"
+    params = {
+        "action": "query",
+        "titles": f"{title}",
+        "prop": "pageimages",
+        "pithumbsize": 400,
+        "format": "json"
+    }
+    response = requests.get(search_url, params=params).json()
+    pages = response["query"]["pages"]
+    for page in pages.values():
+        if "thumbnail" in page:
+            return page["thumbnail"]["source"]
+
+    # Fallback: Met Museum API
+    search = requests.get(
+        f"https://collectionapi.metmuseum.org/public/collection/v1/search",
+        params={"q": f"{title} {artist}", "hasImages": True}
+    ).json()
+    if search["total"] > 0:
+        obj_id = search["objectIDs"][0]
+        obj = requests.get(
+            f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}"
+        ).json()
+        return obj.get("primaryImageSmall")
+
+    return None  # Graceful fallback to text-only card
+```
+
+**Pipeline integration**:
+```
+LLM generates flashcard → fetch_artwork_image(term, artist) → store image_url in SQLite
+```
+
+Available APIs (all free, no authentication required for basic use):
+- **Wikimedia Commons**: Virtually all artworks
+- **Met Museum Open Access**: 400K+ works
+- **Art Institute of Chicago**: 100K+ works
+- **Europeana**: European cultural heritage (free API key)
+
+This is a **post-MVP feature** — simple deterministic function, no agent logic needed. Adds significant value for art history use case.
+
 ## Domain Specialization: Art History
 
 The system is tuned for art history content:
@@ -279,7 +335,7 @@ When answering questions:
 4. **Flashcard Generation**: Structured outputs, CSV export
 5. **UI Assembly**: Gradio `Blocks` layout with upload | chat | flashcards panels
 
-Post-MVP: Quiz generation, reflection loop, multi-class dashboard, Whisper transcription, Mathpix OCR, Flask migration.
+Post-MVP: Quiz generation, reflection loop, artwork image fetching, multi-class dashboard, Whisper transcription, Mathpix OCR, Flask migration.
 
 ## Development Commands
 
