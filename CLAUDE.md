@@ -23,11 +23,13 @@ Key features:
 - All ORM models created and tested
 - Course files (run_agent.py, tools.py, usage.py) integrated
 
-**🚧 Phase 2 - Ingestion Pipeline (TODO)**
-- PDF text extraction
+**✅ Phase 2 - Ingestion Pipeline (COMPLETE)**
+- PDF text extraction (pypdf)
+- Plain text and DOCX extraction
 - Text chunking (800 tokens, 150 overlap)
-- Embedding generation
-- ChromaDB vector storage
+- Embedding generation (OpenAI text-embedding-3-small)
+- ChromaDB vector storage with metadata
+- Integrated into Gradio upload workflow
 
 **🚧 Phase 3 - RAG Chat Agent (TODO)**
 - Tool use implementation (search + code execution)
@@ -76,8 +78,8 @@ study_agent/
 │   │
 │   ├── pipelines/               # ⚡ DETERMINISTIC LAYER
 │   │   ├── __init__.py          ✅
-│   │   ├── ingestion.py         # Phase 2: File routing + extraction
-│   │   ├── chunking.py          # Phase 2: Text splitting + embedding
+│   │   ├── ingestion.py         # File routing + extraction ✅
+│   │   ├── chunking.py          # Text splitting + embedding ✅
 │   │   └── exporters.py         # Phase 4: CSV/TSV export
 │   │
 │   ├── agents/                  # 🤖 AGENTIC LAYER
@@ -110,7 +112,7 @@ study_agent/
 └── .gitignore                   # Git ignore rules ✅
 ```
 
-**Legend:** ✅ = Implemented in Phase 1
+**Legend:** ✅ = Implemented
 
 ## Tech Stack
 
@@ -468,27 +470,105 @@ The key insight: Everything else (file routing, OCR, transcription, chunking, em
 - **Virtual environment required**: Always activate venv before running commands. Dependencies are isolated from system Python.
 - **Usage tracking deferred**: `usage.py` from course materials needs OpenAI import path update. Will be re-enabled in Phase 3.
 
-## Starting Phase 2
+## Phase 2 Implementation Summary
 
-When ready to implement the ingestion pipeline:
+Phase 2 is now complete. Here's what was implemented:
+
+1. **Files created:**
+   - `app/pipelines/ingestion.py` - Deterministic file routing and text extraction ✅
+     - `extract_plain_text()` for .txt/.md files
+     - `extract_docx()` for DOCX files
+     - `extract_pdf()` for PDF files using pypdf
+     - `process_upload()` main entry point
+
+   - `app/pipelines/chunking.py` - Text splitting and embedding ✅
+     - `chunk_text()` using RecursiveCharacterTextSplitter
+     - `generate_embeddings()` with OpenAI text-embedding-3-small
+     - `delete_embeddings()` for cleanup when files are removed
+
+2. **Integration completed:**
+   - Updated `gradio_app.py` `upload_file()` to call full pipeline
+   - Populates `Input.raw_text` field with extracted text
+   - Uses `get_or_create_collection()` from extensions.py
+   - Stores chunks with metadata: `{"source": input_name, "chunk_idx": i}`
+   - Upload status now shows detailed ingestion progress
+
+3. **Configuration used:**
+   - `CHUNK_SIZE = 800` tokens
+   - `CHUNK_OVERLAP = 150` tokens
+   - `EMBEDDING_MODEL = 'text-embedding-3-small'`
+   - Semantic separators: `["\n\n", "\n", ". ", " "]`
+
+## Additional Features Implemented
+
+### File Management (2026-03-20)
+**Purpose**: Enable users to manage uploaded files and clean up test data
+
+**Features:**
+- **Individual File Deletion**: Select and delete specific uploaded files with confirmation
+- **Bulk Delete**: "Clear All Files" button to remove all files from a class (for testing)
+- **Data Cleanup**: Automatically removes files from disk, SQLite, and ChromaDB
+- **Cascade Deletion**: Related flashcards are removed when source file is deleted
+- **Chat History Preserved**: Chat messages remain intact as conversational context
+
+**Implementation** (gradio_app.py):
+- `delete_file(input_id, class_name)` - Transaction-safe deletion across 3 storage layers
+- `clear_all_files(class_name)` - Bulk deletion with best-effort cleanup
+- `get_current_file_list(class_name)` - Helper for UI file list display
+- `get_file_choices(class_name)` - Helper for file selector dropdown
+
+**UI Components**:
+- File selector dropdown in upload panel
+- "Delete Selected" button with confirmation modal
+- "Clear All Files" button with warning confirmation
+- Real-time file list updates after operations
+
+### Class Switching (2026-03-20)
+**Purpose**: Improve UX by allowing users to easily switch between existing classes
+
+**Features:**
+- **Dropdown Selector**: Replace text input with dropdown showing all existing classes
+- **Create New Class**: "➕ Create New Class..." option with conditional text input
+- **Auto-Update**: Dropdown refreshes when new classes are created
+- **Context Switching**: File list and all UI elements update when switching classes
+- **No Default Selection**: Forces explicit class selection for clarity
+
+**Implementation** (gradio_app.py):
+- `get_all_classes()` - Query all classes, return sorted list + create option
+- `handle_class_selection(selected_value)` - Show/hide new class input, load files
+- `create_new_class(new_class_name)` - Create class, update dropdown, switch context
+- Hidden `current_class_name` state component for tracking actual class name
+
+**UI Pattern**:
+- `class_selector` dropdown (populated on load, updated after uploads)
+- `new_class_input` textbox (hidden until "Create New Class" selected)
+- `create_class_btn` button (hidden until needed)
+- All event handlers updated to use hidden state instead of direct textbox
+
+**Benefits:**
+- **Discoverability**: Users see all available classes without guessing names
+- **Error Prevention**: Dropdown prevents typos that would create duplicate classes
+- **Faster Workflow**: One-click switching vs. typing entire class name
+- **Auto-Sync**: New classes appear immediately without page refresh
+
+## Starting Phase 3
+
+When ready to implement the RAG chat agent:
 
 1. **Files to create:**
-   - `app/pipelines/ingestion.py` - File routing and text extraction
-   - `app/pipelines/chunking.py` - Text splitting and embedding
+   - `app/agents/chat_agent.py` - RAG agent with tool use
+   - Update `gradio_app.py` - Wire chat interface to agent
 
-2. **Dependencies already installed:**
-   - `pypdf` for PDF text extraction
-   - `python-docx` for DOCX support
-   - `langchain-text-splitters` for chunking
-   - `openai` for embedding API
+2. **Tools to implement:**
+   - `search_class_materials` - ChromaDB semantic search
+   - `execute_python` - Code execution sandbox (post-MVP for CS domain)
 
-3. **Key integration points:**
-   - Update `gradio_app.py` `upload_file()` to call ingestion pipeline
-   - Populate `Input.raw_text` field during extraction
-   - Use `get_or_create_collection()` from extensions.py
-   - Store chunks with metadata: `source`, `chunk_idx`
+3. **Key components:**
+   - Agent loop using course `run_agent.py` pattern
+   - Chat history persistence to `chat_messages` table
+   - Integration with Gradio `gr.Chatbot` component
 
-4. **Configuration already set:**
-   - `CHUNK_SIZE = 800`
-   - `CHUNK_OVERLAP = 150`
-   - `EMBEDDING_MODEL = 'text-embedding-3-small'`
+4. **Prerequisites (already complete):**
+   - ✅ ChromaDB collections populated with embeddings
+   - ✅ Metadata includes source attribution
+   - ✅ Agent execution framework from course materials

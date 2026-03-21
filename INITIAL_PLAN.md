@@ -861,39 +861,59 @@ That's it. Five features. One page. One class at a time.
 
 ## MVP Build Order
 
-**Phase 1 — Foundation (Days 1–2)**
+**Phase 1 — Foundation (Days 1–2)** ✅ COMPLETE
 
 - Copy `tools.py`, `run_agent.py`, `usage.py` from your course repo
 - SQLite schema with `inputs` and `flashcards` tables
 - ChromaDB collection initialization
 - File save to `data/uploads/`
+- Gradio MVP interface (3-panel layout)
 
-**Phase 2 — Ingestion Pipeline (Days 3–4)**
+**Phase 2 — Ingestion Pipeline (Days 3–4)** ✅ COMPLETE
 
-- PDF text extraction with PyMuPDF (`fitz`)
+- PDF text extraction with pypdf
 - Plain text / DOCX support
 - Chunking with `RecursiveCharacterTextSplitter` + embed into ChromaDB via `text-embedding-3-small`
+- Integrated into Gradio upload workflow with detailed status feedback
+- Full end-to-end pipeline: upload → extract → chunk → embed → store
 
-**Phase 3 — RAG Chat Agent (Days 5–7)**
+**Phase 2.5 — Additional UX Improvements (2026-03-20)** ✅ COMPLETE
+
+### File Management
+- Individual file deletion with confirmation dialogs
+- Bulk "Clear All Files" functionality for testing
+- Three-layer cleanup (disk, SQLite, ChromaDB)
+- Cascade deletion for related flashcards
+- Real-time file list updates
+
+### Class Switching
+- Dropdown selector for existing classes
+- "Create New Class" conditional UI
+- Auto-updating dropdown on class creation
+- Hidden state management for clean event handling
+- Context switching with file list updates
+
+**Phase 3 — RAG Chat Agent (Days 5–7)** 🚧 IN PROGRESS
 
 - `search_class_materials` tool registered in ToolBox
-- Agent loop using course `run_agent()` pattern with `gpt-5-mini`
+- Agent loop using course `run_agent()` pattern with Claude Sonnet
 - YAML agent config for the art history study assistant prompt
-- Wire into Gradio `gr.ChatInterface`
+- Wire into Gradio `gr.Chatbot` component
+- Chat history persistence to database
 
-**Phase 4 — Flashcard Generation + Export (Days 8–9)**
+**Phase 4 — Flashcard Generation + Export (Days 8–9)** 🚧 TODO
 
 - Structured Output call with JSON schema for `{term, definition}` pairs
 - Store flashcards in SQLite
 - CSV export function for Quizlet/Anki
 - Gradio `gr.Dataframe` display + download button
 
-**Phase 5 — Assemble the UI (Day 10)**
+**Phase 5 — Polish & Testing (Day 10)** 🚧 TODO
 
-- Gradio `gr.Blocks()` layout: upload panel | chat panel | flashcard panel
 - Loading indicators during agent calls
-- Error handling for failed uploads
-- Test with real art history PDFs from your courses
+- Comprehensive error handling
+- Test with real art history PDFs from courses
+- Documentation updates
 
 **That's your MVP.** Ten days, one Gradio page, two agentic features (chat + flashcard generation), and a clear deterministic/agentic split to present in CS 301R. Everything builds on patterns you've already implemented in class.
 

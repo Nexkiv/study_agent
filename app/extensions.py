@@ -38,7 +38,7 @@ def get_or_create_collection(class_id: int):
     Get or create a ChromaDB collection for a class.
 
     Collection naming: class_{class_id}
-    Embedding: Default ChromaDB embeddings for MVP (OpenAI in Phase 2)
+    Embedding: Manual embeddings (generated via OpenAI in chunking.py)
 
     Args:
         class_id: Integer class ID from SQLite
@@ -49,7 +49,8 @@ def get_or_create_collection(class_id: int):
     client = get_chroma_client()
     collection = client.get_or_create_collection(
         name=f"class_{class_id}",
-        metadata={"class_id": class_id}
+        metadata={"class_id": class_id},
+        embedding_function=None  # We provide embeddings manually
     )
     return collection
 
