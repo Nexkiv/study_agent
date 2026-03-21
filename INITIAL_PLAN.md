@@ -904,6 +904,13 @@ That's it. Five features. One page. One class at a time.
 - ✅ **Web search tool** via Tavily API for historical context lookup
 - ✅ **Single-line chat input** (Enter to send, standard chat UX)
 
+**Phase 3.5 — Chat Response Optimization (Optional)** 🚧 TODO
+
+- Limit response length to reduce verbosity and costs
+- Options: system prompt instructions, max_tokens parameter, or dynamic limits
+- Trade-off: faster/cheaper vs. detailed art history explanations
+- Recommended: Start with system prompt "Keep responses concise (2-3 paragraphs max)"
+
 **Phase 4 — Flashcard Generation + Export (Days 8–9)** 🚧 TODO
 
 - Structured Output call with JSON schema for `{term, definition}` pairs

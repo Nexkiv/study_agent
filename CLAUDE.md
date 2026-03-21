@@ -630,3 +630,37 @@ All RAG chat agent features have been implemented and tested:
 - ✅ Spelling correction preprocessor
 - ✅ Chat history persistence (in-session via Gradio state)
 - ✅ Agent loop using course `run_agent.py` pattern with OpenAI GPT-4o-mini
+
+### Future Enhancements for Phase 3
+
+**Response Length Limiting:**
+- **Issue**: Agent responses can sometimes be verbose or overly detailed
+- **Proposed Solution**: Add max_tokens parameter to agent config or system prompt instruction
+- **Implementation Options**:
+  1. Hard limit via OpenAI API `max_tokens` parameter (e.g., 500-800 tokens)
+  2. Soft limit via system prompt: "Keep responses concise (2-3 paragraphs max)"
+  3. Dynamic limit based on query complexity (simple questions = shorter responses)
+- **Trade-offs**:
+  - ✅ Faster responses, lower costs
+  - ✅ Better for mobile/quick scanning
+  - ❌ May truncate detailed explanations for complex art history topics
+  - ❌ Risk cutting off mid-sentence if hard limit too strict
+- **Recommended**: Start with system prompt instruction, add hard limit only if needed
+- **File to modify**: `app/agents/chat_agent.py` (ART_HISTORY_SYSTEM_PROMPT or create_rag_agent_config)
+
+**Example Implementation:**
+```python
+# In system prompt:
+ART_HISTORY_SYSTEM_PROMPT = """...
+Response guidelines:
+- Keep responses concise: 2-3 paragraphs maximum
+- Prioritize key facts over exhaustive detail
+- Use bullet points for lists of artworks or characteristics
+"""
+
+# Or in agent config:
+"kwargs": {
+    "temperature": 0.7,
+    "max_tokens": 600  # Limit response length
+}
+```
