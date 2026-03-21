@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 # API Keys
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
 MATHPIX_APP_ID = os.getenv('MATHPIX_APP_ID')
 MATHPIX_APP_KEY = os.getenv('MATHPIX_APP_KEY')
 
@@ -36,7 +37,7 @@ CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
 
 # Model defaults
-DEFAULT_CHAT_MODEL = 'claude-sonnet-4-20250514'
+DEFAULT_CHAT_MODEL = 'gpt-4o-mini'  # Phase 3: Using OpenAI for chat
 DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 
 def ensure_directories():

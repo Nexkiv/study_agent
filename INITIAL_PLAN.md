@@ -893,13 +893,16 @@ That's it. Five features. One page. One class at a time.
 - Hidden state management for clean event handling
 - Context switching with file list updates
 
-**Phase 3 — RAG Chat Agent (Days 5–7)** 🚧 IN PROGRESS
+**Phase 3 — RAG Chat Agent (Days 5–7)** ✅ COMPLETE
 
-- `search_class_materials` tool registered in ToolBox
-- Agent loop using course `run_agent()` pattern with Claude Sonnet
-- YAML agent config for the art history study assistant prompt
-- Wire into Gradio `gr.Chatbot` component
-- Chat history persistence to database
+- ✅ `search_class_materials` tool registered in ToolBox
+- ✅ Agent loop using course `run_agent()` pattern with OpenAI GPT-4o-mini
+- ✅ Art history expert system prompt with tool usage guidelines
+- ✅ Wired into Gradio `gr.Chatbot` component
+- ✅ Chat history persistence (in-session via Gradio state)
+- ✅ **Spelling correction** with rapidfuzz (65% threshold, catches "Alderfini" → "Arnolfini")
+- ✅ **Web search tool** via Tavily API for historical context lookup
+- ✅ **Single-line chat input** (Enter to send, standard chat UX)
 
 **Phase 4 — Flashcard Generation + Export (Days 8–9)** 🚧 TODO
 

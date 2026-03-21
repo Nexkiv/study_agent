@@ -21,6 +21,17 @@ from app.models import Class, Input, Flashcard, ChatMessage
 from app.utils.file_handler import save_upload, delete_upload
 from app.pipelines.ingestion import process_upload
 from app.pipelines.chunking import chunk_text, generate_embeddings, delete_embeddings
+from app.agents.run_agent import run_agent
+from app.agents.tools import ToolBox
+from app.agents.chat_agent import (
+    get_async_openai_client,
+    create_rag_agent_config,
+    create_search_tool,
+    execute_python,
+    correct_spelling,
+    search_web
+)
+import asyncio
 from flask import Flask
 
 app = None
@@ -307,23 +318,102 @@ def create_new_class(new_class_name: str):
             f"✅ Created new class: {new_class_name}"  # status
         )
 
-def chat_with_materials(message, history, class_name):
-    """RAG chat agent (Phase 3 placeholder)."""
+async def chat_with_materials(message, history, class_name):
+    """
+    RAG chat agent with tool use (Phase 3).
+
+    Uses GPT-4o-mini with search_class_materials and execute_python tools.
+    History persists in Gradio state (in-session only).
+    """
+    # Validation
+    if not message or not message.strip():
+        return history
+
     if not class_name:
-        # Gradio 5.x format: list of dicts with 'role' and 'content'
-        return history + [{"role": "user", "content": message},
-                         {"role": "assistant", "content": "⚠️ Please enter a class name first"}]
+        return history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": "⚠️ Please select a class first"}
+        ]
 
-    response = (
-        f"🚧 Phase 3 feature coming soon!\n\n"
-        f"You asked: '{message}'\n"
-        f"Class: {class_name}\n\n"
-        f"The RAG agent will search your uploaded materials and answer."
-    )
+    try:
+        # Correct spelling using terms from class materials
+        # This helps with misspellings like "Alderfini" -> "Arnolfini"
+        with app.app_context():
+            corrected_message = correct_spelling(message, class_name)
 
-    # Gradio 5.x format
-    return history + [{"role": "user", "content": message},
-                     {"role": "assistant", "content": response}]
+        # Use corrected message for agent processing
+        user_message = corrected_message
+
+        # Initialize ToolBox and register tools
+        toolbox = ToolBox()
+
+        # Register search tool (class-specific)
+        search_tool = create_search_tool(class_name)
+        toolbox.tool(search_tool)
+
+        # Register web search tool
+        toolbox.tool(search_web)
+
+        # Register execute_python tool
+        toolbox.tool(execute_python)
+
+        # Get OpenAI async client
+        client = get_async_openai_client()
+
+        # Create agent config
+        agent_config = create_rag_agent_config(class_name)
+
+        # Build clean conversation history for agent
+        # Normalize content to plain strings (run_agent adds user message with string content)
+        conversation_history = []
+        for msg in (history or []):
+            if not isinstance(msg, dict) or "role" not in msg or "content" not in msg:
+                continue
+
+            # Extract text content (handle both string and structured content)
+            content = msg["content"]
+            if isinstance(content, str):
+                text_content = content
+            elif isinstance(content, list):
+                # Structured content: extract text from all text-type items
+                text_content = " ".join(
+                    item.get("text", "")
+                    for item in content
+                    if isinstance(item, dict) and "text" in item
+                )
+            else:
+                continue  # Skip malformed messages
+
+            conversation_history.append({
+                "role": msg["role"],
+                "content": text_content
+            })
+
+        # Run agent with fresh history (run_agent mutates history internally)
+        with app.app_context():  # Needed for SQLAlchemy queries
+            response_text = await run_agent(
+                client=client,
+                toolbox=toolbox,
+                agent=agent_config,
+                user_message=user_message,  # Use spelling-corrected message
+                history=conversation_history,  # Fresh copy, not Gradio state
+                usage=None  # Deferred to Phase 3.5
+            )
+
+        # Build final response
+        final_response = response_text or "I apologize, but I couldn't generate a response."
+
+        return history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": final_response}
+        ]
+
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        return history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": error_msg}
+        ]
 
 def generate_flashcards(class_name, topic):
     """Generate flashcards (Phase 4 placeholder)."""
@@ -341,12 +431,20 @@ def export_flashcards(class_name, format_choice):
     """Export flashcards (Phase 4 placeholder)."""
     return None
 
+def clear_chat():
+    """
+    Clear chat history (in-session only).
+
+    Returns empty list to reset Gradio chatbot.
+    Phase 3.5 will delete from database.
+    """
+    return []
+
 def build_ui():
     """Build the Gradio Blocks interface."""
 
     with gr.Blocks(
-        title="StudyAgent - Art History",
-        theme=gr.themes.Soft(primary_hue="indigo")
+        title="StudyAgent - Art History"
     ) as demo:
 
         gr.Markdown(
@@ -448,9 +546,13 @@ def build_ui():
                 )
                 chat_input = gr.Textbox(
                     label="Ask a question",
-                    placeholder="e.g., What are key characteristics of Baroque art?"
+                    placeholder="e.g., What are key characteristics of Baroque art? (Press Enter to send)",
+                    lines=1,
+                    max_lines=1,
+                    submit_btn=True
                 )
                 chat_btn = gr.Button("Send", variant="primary")
+                clear_chat_btn = gr.Button("Clear Chat", variant="secondary", size="sm")
 
             with gr.Column(scale=1):
                 gr.Markdown("### 🃏 Flashcards")
@@ -538,10 +640,30 @@ def build_ui():
             outputs=[file_list, file_selector]
         )
 
+        # Send message handler
         chat_btn.click(
             fn=chat_with_materials,
             inputs=[chat_input, chatbot, current_class_name],
             outputs=[chatbot]
+        ).then(
+            fn=lambda: "",  # Clear input after send
+            outputs=[chat_input]
+        )
+
+        # Clear chat handler
+        clear_chat_btn.click(
+            fn=clear_chat,
+            outputs=[chatbot]
+        )
+
+        # Submit on Enter key (Shift+Enter for newline handled automatically)
+        chat_input.submit(
+            fn=chat_with_materials,
+            inputs=[chat_input, chatbot, current_class_name],
+            outputs=[chatbot]
+        ).then(
+            fn=lambda: "",  # Clear input after send
+            outputs=[chat_input]
         )
 
         # Individual delete workflow
@@ -620,7 +742,7 @@ def build_ui():
             ---
             **Phase 1**: Upload files, save to database ✅
             **Phase 2**: Text extraction, chunking, embedding ✅
-            **Phase 3**: RAG chat agent with tool use 🚧
+            **Phase 3**: RAG chat agent (search + web search + code execution + spelling correction) ✅
             **Phase 4**: Flashcard generation with structured outputs 🚧
             """
         )
@@ -639,5 +761,6 @@ if __name__ == '__main__':
     demo.launch(
         server_name="127.0.0.1",
         server_port=7860,
-        share=False
+        share=False,
+        theme=gr.themes.Soft(primary_hue="indigo")
     )

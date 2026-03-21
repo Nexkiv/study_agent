@@ -31,11 +31,14 @@ Key features:
 - ChromaDB vector storage with metadata
 - Integrated into Gradio upload workflow
 
-**🚧 Phase 3 - RAG Chat Agent (TODO)**
-- Tool use implementation (search + code execution)
-- Agent loop with Anthropic Claude
-- Chat history persistence
-- Usage tracking (re-enable usage.py)
+**✅ Phase 3 - RAG Chat Agent (COMPLETE)**
+- ✅ Tool use implementation (search_class_materials + execute_python + search_web)
+- ✅ Agent loop with OpenAI GPT-4o-mini (responses API with tool calling)
+- ✅ Chat history persistence (in-session via Gradio state)
+- ✅ Spelling correction with rapidfuzz (65% similarity threshold)
+- ✅ Web search integration via Tavily API (optional, for historical context)
+- ✅ Single-line chat input (Enter to send, standard chat UX)
+- ⏸️ Usage tracking (deferred - usage.py needs OpenAI SDK update)
 
 **🚧 Phase 4 - Flashcard Generation (TODO)**
 - OpenAI Structured Outputs
@@ -551,24 +554,79 @@ Phase 2 is now complete. Here's what was implemented:
 - **Faster Workflow**: One-click switching vs. typing entire class name
 - **Auto-Sync**: New classes appear immediately without page refresh
 
-## Starting Phase 3
+### RAG Chat Enhancements (2026-03-20)
+**Purpose**: Improve chat UX and enable historical context lookup beyond course materials
 
-When ready to implement the RAG chat agent:
+#### 1. Keyboard Shortcuts
+**Problem**: Gradio 5.x multi-line textboxes use Shift+Enter to submit (not intuitive for chat)
+**Solution**: Changed to single-line input (`lines=1`) so Enter submits messages immediately
 
-1. **Files to create:**
-   - `app/agents/chat_agent.py` - RAG agent with tool use
-   - Update `gradio_app.py` - Wire chat interface to agent
+**Technical Details:**
+- Gradio keyboard behavior is controlled by `lines` parameter, not `submit_btn`
+- `lines=1`: Enter submits (standard chat UX like ChatGPT, Slack)
+- `lines>1`: Shift+Enter submits, Enter creates newlines (email-style)
+- File: gradio_app.py:534-540
 
-2. **Tools to implement:**
-   - `search_class_materials` - ChromaDB semantic search
-   - `execute_python` - Code execution sandbox (post-MVP for CS domain)
+**Trade-off**: Users cannot type multi-paragraph questions, but this matches standard chat expectations and is appropriate for art history Q&A.
 
-3. **Key components:**
-   - Agent loop using course `run_agent.py` pattern
-   - Chat history persistence to `chat_messages` table
-   - Integration with Gradio `gr.Chatbot` component
+#### 2. Spelling Correction
+**Purpose**: Automatically correct misspellings using terms from uploaded course materials
 
-4. **Prerequisites (already complete):**
-   - ✅ ChromaDB collections populated with embeddings
-   - ✅ Metadata includes source attribution
-   - ✅ Agent execution framework from course materials
+**Implementation** (app/agents/chat_agent.py):
+- `correct_spelling(query, class_name)` - Fuzzy matching preprocessor
+- Extracts proper nouns (capitalized words) from ChromaDB documents using regex
+- Uses `rapidfuzz` library with `fuzz.ratio` scorer
+- Similarity threshold: **65%** (catches "Alderfini" → "Arnolfini" at 66.67%)
+- Preserves original punctuation and capitalization
+- Gracefully falls back to original query on error
+
+**Dependencies:**
+- `rapidfuzz>=3.0.0` added to requirements.txt
+
+**Example:**
+```
+User types: "Who is Alderfini?"
+Corrected to: "Who is Arnolfini?"
+Agent receives corrected query
+```
+
+**Why 65% threshold?**
+- Initially tried 80%, but "Alderfini" vs "Arnolfini" scores 66.67%
+- 65% catches common typos while avoiding false positives
+- Upper bound (<100%) prevents "correcting" exact matches
+
+#### 3. Web Search Tool
+**Purpose**: Enable historical context and connections not in uploaded materials
+
+**Implementation** (app/agents/chat_agent.py):
+- `search_web(query, max_results=3)` - Async Tavily API integration
+- Adds "art history" prefix to queries for better results
+- Prefers reliable sources: Wikipedia, Met Museum, art history sites
+- Returns formatted results with titles, URLs, and content snippets
+- Gracefully handles missing API key with setup instructions
+
+**Dependencies:**
+- `tavily-python>=0.3.0` added to requirements.txt
+- `TAVILY_API_KEY` added to config.py and .env.example
+
+**Agent Behavior:**
+- System prompt instructs: "For historical connections or context not in materials, use search_web"
+- Example use case: "How are the Portinari and Medici families related?"
+- Agent checks course materials first, then uses web search for broader context
+
+**Setup:**
+1. Sign up at https://tavily.com (free tier available)
+2. Add `TAVILY_API_KEY=tvly-xxx` to .env
+3. Restart application
+
+**Optional Feature**: Works without API key (shows helpful error message explaining setup)
+
+## Phase 3 Complete
+
+All RAG chat agent features have been implemented and tested:
+- ✅ `app/agents/chat_agent.py` - RAG agent with 3 tools (search, web, code execution)
+- ✅ `gradio_app.py` - Chat interface wired to agent with async handling
+- ✅ Tool use: `search_class_materials`, `search_web`, `execute_python`
+- ✅ Spelling correction preprocessor
+- ✅ Chat history persistence (in-session via Gradio state)
+- ✅ Agent loop using course `run_agent.py` pattern with OpenAI GPT-4o-mini
