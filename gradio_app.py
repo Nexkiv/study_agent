@@ -31,6 +31,8 @@ from app.agents.chat_agent import (
     correct_spelling,
     search_web
 )
+from app.agents.study_agent import generate_flashcards_for_topic
+from app.pipelines.exporters import export_to_quizlet, export_to_anki
 import asyncio
 from flask import Flask
 
@@ -416,20 +418,124 @@ async def chat_with_materials(message, history, class_name):
         ]
 
 def generate_flashcards(class_name, topic):
-    """Generate flashcards (Phase 4 placeholder)."""
-    if not class_name:
-        return "⚠️ Please enter a class name", None
+    """
+    Generate flashcards using RAG agent with Structured Outputs.
 
-    return (
-        f"🚧 Phase 4 feature coming soon!\n\n"
-        f"Will generate flashcards for {class_name}"
-        f"{f' on topic: {topic}' if topic else ''}\n"
-        f"Using OpenAI Structured Outputs."
-    ), None
+    Args:
+        class_name: Class to generate from
+        topic: Optional topic/request (e.g., "Baroque period")
+
+    Returns:
+        (status_message, flashcard_dataframe)
+    """
+    if not class_name:
+        return "⚠️ Please select a class", None
+
+    try:
+        with app.app_context():
+            # Verify class exists
+            class_obj = Class.query.filter_by(name=class_name).first()
+            if not class_obj:
+                return f"⚠️ Class '{class_name}' not found", None
+
+            # Check for uploaded materials
+            if not Input.query.filter_by(class_id=class_obj.id).first():
+                return "⚠️ No materials uploaded yet. Please upload files first.", None
+
+            # Default topic if not provided
+            if not topic or not topic.strip():
+                topic = "all major topics covered in the course materials"
+
+            # Call async agent function
+            flashcards, agent_status = asyncio.run(
+                generate_flashcards_for_topic(class_name, topic, count=15)
+            )
+
+            # Check if any flashcards were generated
+            if not flashcards:
+                return "⚠️ No flashcards generated. Try a more specific topic or check your materials.", None
+
+            # Store flashcards in database
+            for card in flashcards:
+                flashcard_obj = Flashcard(
+                    class_id=class_obj.id,
+                    input_id=None,  # Generated from multiple sources
+                    term=card['term'],
+                    definition=card['definition'],
+                    image_url=None  # Phase 4.5
+                )
+                db.session.add(flashcard_obj)
+
+            db.session.commit()
+
+            # Format for Gradio dataframe
+            dataframe_data = [[card['term'], card['definition']] for card in flashcards]
+
+            success_msg = (
+                f"✅ Generated {len(flashcards)} flashcards on: {topic}\n"
+                f"{agent_status}"
+            )
+
+            return success_msg, dataframe_data
+
+    except Exception as e:
+        error_msg = f"❌ Error generating flashcards: {str(e)}"
+        print(error_msg)  # Log to console
+        return error_msg, None
 
 def export_flashcards(class_name, format_choice):
-    """Export flashcards (Phase 4 placeholder)."""
-    return None
+    """
+    Export flashcards to CSV/TSV file.
+
+    Args:
+        class_name: Class to export from
+        format_choice: "Quizlet (TSV)" or "Anki (CSV)"
+
+    Returns:
+        File path for Gradio download, or None if no flashcards
+    """
+    if not class_name:
+        return None
+
+    try:
+        with app.app_context():
+            # Get class
+            class_obj = Class.query.filter_by(name=class_name).first()
+            if not class_obj:
+                return None
+
+            # Get all flashcards for this class
+            flashcards = Flashcard.query.filter_by(class_id=class_obj.id).all()
+
+            if not flashcards:
+                return None
+
+            # Convert to dict format
+            cards_data = [
+                {"term": card.term, "definition": card.definition}
+                for card in flashcards
+            ]
+
+            # Export based on format
+            if format_choice == "Quizlet (TSV)":
+                content = export_to_quizlet(cards_data)
+                filename = f"{class_name.replace(' ', '_')}_flashcards_quizlet.tsv"
+            else:  # Anki (CSV)
+                content = export_to_anki(cards_data)
+                filename = f"{class_name.replace(' ', '_')}_flashcards_anki.csv"
+
+            # Write to temp file (Gradio handles cleanup)
+            export_path = UPLOAD_PATH / "exports"
+            export_path.mkdir(exist_ok=True)
+
+            file_path = export_path / filename
+            file_path.write_text(content, encoding='utf-8')
+
+            return str(file_path)
+
+    except Exception as e:
+        print(f"Export error: {e}")
+        return None
 
 def clear_chat():
     """
@@ -743,7 +849,7 @@ def build_ui():
             **Phase 1**: Upload files, save to database ✅
             **Phase 2**: Text extraction, chunking, embedding ✅
             **Phase 3**: RAG chat agent (search + web search + code execution + spelling correction) ✅
-            **Phase 4**: Flashcard generation with structured outputs 🚧
+            **Phase 4**: Flashcard generation with structured outputs + CSV export ✅
             """
         )
 

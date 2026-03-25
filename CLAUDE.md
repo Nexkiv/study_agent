@@ -40,10 +40,20 @@ Key features:
 - ✅ Single-line chat input (Enter to send, standard chat UX)
 - ⏸️ Usage tracking (deferred - usage.py needs OpenAI SDK update)
 
-**🚧 Phase 4 - Flashcard Generation (TODO)**
-- OpenAI Structured Outputs
-- CSV export for Quizlet/Anki
-- Artwork image fetching (post-MVP)
+**✅ Phase 4 - Flashcard Generation (COMPLETE)**
+- ✅ Flashcard generation agent (`app/agents/study_agent.py`)
+  - RAG-based agent with tool use (search_class_materials + generate_flashcards_structured)
+  - OpenAI Structured Outputs with Responses API
+  - System prompt specialized for art history flashcards
+  - Bugfix: Correct JSON parsing from response.output[0].content[0].text
+- ✅ Export functionality (`app/pipelines/exporters.py`)
+  - Quizlet TSV format (tab-separated)
+  - Anki CSV format (proper escaping)
+- ✅ Gradio UI integration
+  - Generate flashcards with topic input
+  - Export to Quizlet/Anki formats
+  - Database persistence (SQLite)
+- ⏸️ Artwork image fetching (deferred to Phase 4.5)
 
 ## Architecture Philosophy
 
@@ -395,11 +405,11 @@ When answering questions:
 
 ## MVP Build Order
 
-1. **Foundation**: SQLite schema, ChromaDB initialization, file uploads
-2. **Ingestion Pipeline**: PDF extraction, chunking, embedding
-3. **RAG Chat Agent**: Tool definitions, agent loop, Gradio `ChatInterface`
-4. **Flashcard Generation**: Structured outputs, CSV export
-5. **UI Assembly**: Gradio `Blocks` layout with upload | chat | flashcards panels
+1. **Foundation**: SQLite schema, ChromaDB initialization, file uploads ✅
+2. **Ingestion Pipeline**: PDF extraction, chunking, embedding ✅
+3. **RAG Chat Agent**: Tool definitions, agent loop, Gradio `ChatInterface` ✅
+4. **Flashcard Generation**: Structured outputs, CSV export ✅
+5. **UI Assembly**: Gradio `Blocks` layout with upload | chat | flashcards panels ✅
 
 Post-MVP: Quiz generation, reflection loop, artwork image fetching, multi-class dashboard, Whisper transcription, Mathpix OCR, Flask migration.
 
@@ -620,6 +630,33 @@ Agent receives corrected query
 3. Restart application
 
 **Optional Feature**: Works without API key (shows helpful error message explaining setup)
+
+### Flashcard Generation (2026-03-24)
+**Purpose**: Generate study flashcards from course materials using AI
+
+**Features:**
+- **Intelligent Generation**: Agent uses RAG to find relevant content based on topic
+- **Structured Outputs**: Guaranteed JSON format with term/definition pairs
+- **Multiple Export Formats**: Quizlet TSV and Anki CSV
+- **Database Persistence**: Flashcards stored in SQLite for later retrieval
+
+**Implementation** (app/agents/study_agent.py, app/pipelines/exporters.py, gradio_app.py):
+- `generate_flashcards_for_topic()` - Main entry point with agentic workflow
+- `generate_flashcards_structured()` - Tool using OpenAI Structured Outputs
+- `export_to_quizlet()` - TSV formatter for Quizlet import
+- `export_to_anki()` - CSV formatter with proper escaping
+
+**Usage Flow**:
+- User enters topic (e.g., "Baroque period")
+- Agent searches class materials via RAG
+- Agent generates 15 flashcards using Structured Outputs
+- Flashcards saved to database and displayed in UI
+- User exports to Quizlet or Anki format
+
+**Bugfix Applied** (2026-03-24):
+- Fixed JSON parsing error in Structured Outputs response
+- Issue: `response.output[0].content` is a list, not a string
+- Solution: Extract text from `response.output[0].content[0].text`
 
 ## Phase 3 Complete
 

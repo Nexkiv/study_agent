@@ -43,6 +43,7 @@ DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 def ensure_directories():
     """Create data directories if they don't exist."""
     UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_PATH / "exports").mkdir(exist_ok=True)
     CHROMA_PATH.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
