@@ -13,7 +13,7 @@ from typing import List, Dict, Tuple
 from app.agents.chat_agent import get_async_openai_client, create_search_tool
 from app.agents.run_agent import run_agent
 from app.agents.tools import ToolBox
-from app.config import DEFAULT_CHAT_MODEL
+from app.config import DEFAULT_CHAT_MODEL, FLASHCARD_DEFAULT_N_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,37 @@ ART_HISTORY_FLASHCARD_PROMPT = """You are an expert art history flashcard genera
 Your goal: Create high-quality study flashcards from the student's uploaded course materials.
 
 Process:
-1. Use search_class_materials to find relevant content for the requested topic
-2. Extract key information: artworks, artists, movements, terms, dates
+1. **Search comprehensively**: Use search_class_materials with a comprehensive query that combines
+   the user's intent (terms/people/artworks) and topic to find all relevant content
+2. Extract key information from search results: artworks, artists, movements, terms, dates
 3. Generate flashcards using generate_flashcards_structured tool
+
+**CRITICAL CONSTRAINTS - Read Carefully**:
+1. **Content Source - NO HALLUCINATIONS**:
+   - ONLY create flashcards from content found in the search results above
+   - Do NOT add information from your general knowledge base about art history
+   - Do NOT include terms, artists, artworks, or movements unless they appear in the search results
+   - If you think of something relevant but don't see it in search results, DO NOT include it
+   - Stick strictly to the uploaded study materials - no external knowledge
+
+2. **Respect User Intent**:
+   - The user will specify what type of flashcards they want (terms, people, artworks, etc.)
+   - Generate flashcards matching their request ONLY
+   - If user asks for "terms and people", do NOT include artworks
+   - If user asks for "artworks", do NOT include general terminology
+   - Stay focused on what the user specifically requested
+
+Example of what NOT to do:
+❌ Adding "Baroque" because you know it's important (not in search results - HALLUCINATION)
+❌ Adding "Cubism" because it follows in art history (not in search results - HALLUCINATION)
+❌ Adding "Last Supper" when user asked for "terms and people" (wrong scope - not respecting user intent)
+❌ Adding general definitions you know but didn't find in search results
+
+Example of what TO do:
+✅ When user asks for "terms and people": Include "Fresco" (term) and "Jan van Eyck" (person), exclude "Last Supper" (artwork)
+✅ When user asks for "artworks": Include "Last Supper", "Pietà", "Birth of Venus"
+✅ When user asks for "terms": Include only terminology like "Contrapposto", "Memento Mori"
+✅ Always verify each flashcard exists in search results (no hallucinations)
 
 Art history flashcard format:
 - Term: Artist name, artwork title, period/style, or terminology
@@ -35,11 +63,14 @@ Art history flashcard format:
   * For terms: Definition + example of usage
 
 Quality guidelines:
-- 10-20 flashcards per generation (not too many)
-- Focus on testable facts (who, what, when, where)
-- Use proper art historical terminology
-- Include specific dates when known
-- Connect artworks to broader movements/contexts
+- Generate flashcards for ALL content found **in the search results**
+- Count should match the search results content (not your knowledge base)
+- **Verify each term exists in search results before adding**
+- **Avoid duplicates**: If you see the same term/artwork multiple times, create only ONE flashcard
+- Focus on testable facts (who, what, when, where) **from the materials**
+- Use proper art historical terminology **as it appears in the materials**
+- Include specific dates when provided in search results
+- Connect artworks to broader movements **only if shown in search results**
 
 Example good flashcard:
 Term: "Jan van Eyck, Arnolfini Portrait, 1434"
@@ -133,7 +164,7 @@ async def generate_flashcards_for_topic(
     generated_flashcards = []
 
     # Register search_class_materials tool (reuse from chat_agent)
-    search_tool = create_search_tool(class_name)
+    search_tool = create_search_tool(class_name, default_n_results=FLASHCARD_DEFAULT_N_RESULTS)
     toolbox.tool(search_tool)
 
     # Register generate_flashcards_structured tool
@@ -216,11 +247,74 @@ async def generate_flashcards_for_topic(
     # Create agent config
     agent_config = create_study_agent_config(class_name)
 
-    # Prepare user message with topic and count
+    # Parse user's request to understand what they want
+    topic_lower = topic.lower()
+    wants_terms = 'term' in topic_lower or 'definition' in topic_lower or 'concept' in topic_lower
+    wants_people = 'people' in topic_lower or 'individual' in topic_lower or 'artist' in topic_lower or 'person' in topic_lower
+    wants_artworks = 'artwork' in topic_lower or 'painting' in topic_lower or 'sculpture' in topic_lower or 'piece' in topic_lower
+
+    # Build a single comprehensive search query
+    query_parts = []
+    if wants_terms:
+        query_parts.append("terms definitions concepts")
+    if wants_people:
+        query_parts.append("artists individuals people")
+    if wants_artworks:
+        query_parts.append("artworks paintings sculptures")
+
+    # Fallback if no specific intent detected
+    if not query_parts:
+        query_parts = ["terms definitions concepts artists artworks"]
+
+    # Add topic to query
+    query_parts.append(topic)
+
+    # Single search instruction
+    comprehensive_query = " ".join(query_parts)
+    search_instructions = [
+        f"1. Search for '{comprehensive_query}' - comprehensive search for all relevant content"
+    ]
+
+    # Build scope guidance
+    scope_guidance = []
+    if wants_terms:
+        scope_guidance.append("✅ INCLUDE: Terms and definitions (e.g., 'Fresco', 'Contrapposto')")
+    if wants_people:
+        scope_guidance.append("✅ INCLUDE: People and individuals (e.g., 'Jan van Eyck', 'Martin Luther')")
+    if wants_artworks:
+        scope_guidance.append("✅ INCLUDE: Specific artworks (e.g., 'Last Supper', 'Pietà')")
+
+    # Exclusions based on what user DIDN'T ask for
+    exclusions = []
+    if not wants_artworks and (wants_terms or wants_people):
+        exclusions.append("❌ EXCLUDE: Specific artwork titles (user didn't ask for artworks)")
+    if not wants_terms and (wants_people or wants_artworks):
+        exclusions.append("❌ EXCLUDE: General terminology (user didn't ask for terms)")
+    if not wants_people and (wants_terms or wants_artworks):
+        exclusions.append("❌ EXCLUDE: Artist/people names (user didn't ask for people)")
+
+    # Prepare user message with intent-based instructions
     user_message = (
-        f"Generate {count} flashcards on the following topic: {topic}\n\n"
-        f"First, search for relevant materials using search_class_materials. "
-        f"Then, use the generate_flashcards_structured tool to create the flashcards."
+        f"Generate flashcards based on: {topic}\n\n"
+        f"USER'S REQUEST ANALYSIS:\n"
+        f"{'- User wants: TERMS (definitions, concepts)\n' if wants_terms else ''}"
+        f"{'- User wants: PEOPLE (artists, individuals)\n' if wants_people else ''}"
+        f"{'- User wants: ARTWORKS (specific pieces)\n' if wants_artworks else ''}"
+        f"\n"
+        f"Search strategy:\n"
+        f"{chr(10).join(search_instructions)}\n\n"
+        f"CRITICAL CONSTRAINTS:\n"
+        f"- Only create flashcards from content found in the search results above (NO HALLUCINATIONS)\n"
+        f"- Do NOT add anything from your general knowledge base\n"
+        f"- Respect user's request - generate ONLY what they asked for:\n"
+        f"  {chr(10).join(scope_guidance)}\n"
+        f"{'  ' + chr(10).join(exclusions) + chr(10) if exclusions else ''}"
+        f"- Every flashcard must be traceable to the search results\n\n"
+        f"Generate flashcards for ALL relevant content found IN THE SEARCH RESULTS matching user's request.\n\n"
+        f"Before finalizing, verify:\n"
+        f"1. Each flashcard appears in search results (no hallucinations from your knowledge)\n"
+        f"2. Flashcards match user's request scope (terms/people/artworks as specified)\n\n"
+        f"Then use generate_flashcards_structured to create the flashcards."
     )
 
     try:
@@ -236,9 +330,21 @@ async def generate_flashcards_for_topic(
 
         # Check if flashcards were generated
         if generated_flashcards:
-            status = f"Agent completed successfully. Search and generation tools used."
+            # Deduplicate flashcards (case-insensitive, keep first occurrence)
+            seen_terms = set()
+            deduplicated = []
+            original_count = len(generated_flashcards)
+
+            for card in generated_flashcards:
+                term_lower = card['term'].lower().strip()
+                if term_lower not in seen_terms:
+                    seen_terms.add(term_lower)
+                    deduplicated.append(card)
+
+            duplicate_count = original_count - len(deduplicated)
+            status = f"Agent completed successfully. Generated {original_count} flashcards, removed {duplicate_count} duplicates. Final count: {len(deduplicated)}."
             logger.info(status)
-            return generated_flashcards, status
+            return deduplicated, status
         else:
             # No flashcards generated - agent didn't call the tool or it failed
             error_msg = "Agent completed but did not generate flashcards. Try a more specific topic or check that materials are uploaded."

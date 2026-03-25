@@ -40,6 +40,10 @@ CHUNK_OVERLAP = 150
 DEFAULT_CHAT_MODEL = 'gpt-4o-mini'  # Phase 3: Using OpenAI for chat
 DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 
+# Search result configuration
+CHAT_DEFAULT_N_RESULTS = 5          # Chat needs targeted results
+FLASHCARD_DEFAULT_N_RESULTS = 15    # Single search with comprehensive query (was 20, then 10, now 15)
+
 # OCR Configuration
 TESSERACT_CMD = os.getenv('TESSERACT_CMD')  # Optional: override Tesseract path
 OCR_QUALITY_THRESHOLD = int(os.getenv('OCR_QUALITY_THRESHOLD', '100'))  # Min chars/page
