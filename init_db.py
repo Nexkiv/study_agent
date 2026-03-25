@@ -53,6 +53,26 @@ def init_database():
         tables = inspector.get_table_names()
         print(f"  Tables: {', '.join(tables)}")
 
+    # Initialize migration system
+    from app.migrations import MigrationRunner
+    migrations_dir = Path(__file__).parent / 'app' / 'migrations'
+    runner = MigrationRunner(DATABASE_PATH, migrations_dir)
+
+    # Create migration tracking table
+    runner.ensure_migration_table()
+
+    # Record baseline as version 0 (all tables already created above)
+    import sqlite3
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, description) VALUES (0, 'Baseline schema')"
+    )
+    conn.commit()
+    conn.close()
+
+    print(f"✓ Migration system initialized (baseline v0)")
+
     # Test ChromaDB connection
     try:
         client = get_chroma_client()

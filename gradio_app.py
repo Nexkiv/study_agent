@@ -19,7 +19,7 @@ from app.config import validate_config, ensure_directories, UPLOAD_PATH
 from app.extensions import db, get_chroma_client
 from app.models import Class, Input, Flashcard, ChatMessage
 from app.utils.file_handler import save_upload, delete_upload
-from app.pipelines.ingestion import process_upload
+from app.pipelines.ingestion import process_upload, extract_pdf
 from app.pipelines.chunking import chunk_text, generate_embeddings, delete_embeddings
 from app.agents.run_agent import run_agent
 from app.agents.tools import ToolBox
@@ -52,6 +52,19 @@ def init_app():
 
     db.init_app(app)
     get_chroma_client()
+
+    # Run database migrations automatically on startup
+    from app.migrations import MigrationRunner
+    from app.config import PROJECT_ROOT, DATABASE_PATH
+    migrations_dir = PROJECT_ROOT / 'app' / 'migrations'
+    runner = MigrationRunner(DATABASE_PATH, migrations_dir)
+
+    try:
+        runner.run_migrations()
+    except Exception as e:
+        print(f"⚠️ Migration failed: {e}")
+        print("Database may be in inconsistent state. Run: python init_db.py")
+        raise
 
     print("✓ StudyAgent initialized")
 
@@ -86,12 +99,22 @@ def upload_file(file, class_name, input_name, input_type):
 
             # Phase 2: Extract text from uploaded file
             try:
-                raw_text = process_upload(
-                    str(absolute_path),
-                    class_obj.id,
-                    input_name,
-                    input_type
-                )
+                ext = Path(absolute_path).suffix.lower()
+
+                if ext == '.pdf':
+                    raw_text, page_count, needs_ocr = extract_pdf(str(absolute_path))
+                    extraction_method = 'pypdf'
+                elif ext == '.pptx':
+                    from app.pipelines.ocr import extract_pptx
+                    raw_text = extract_pptx(str(absolute_path))
+                    page_count = 1
+                    needs_ocr = False
+                    extraction_method = 'pptx'
+                else:
+                    raw_text = process_upload(str(absolute_path), class_obj.id, input_name, input_type)
+                    page_count = 1
+                    needs_ocr = False
+                    extraction_method = 'standard'
             except Exception as e:
                 return f"❌ Text extraction failed: {str(e)}", None
 
@@ -108,7 +131,8 @@ def upload_file(file, class_name, input_name, input_type):
                 name=input_name,
                 input_type=input_type,
                 file_path=relative_path,
-                raw_text=raw_text
+                raw_text=raw_text,
+                extraction_method=extraction_method
             )
             db.session.add(input_obj)
             db.session.commit()
@@ -119,11 +143,84 @@ def upload_file(file, class_name, input_name, input_type):
                         for inp in inputs]
 
             chunk_count = len(chunks)
-            return (
+            status_msg = (
                 f"✅ Uploaded: {input_name}\n"
                 f"📄 Extracted {len(raw_text):,} characters\n"
                 f"🔢 Created {chunk_count} chunks\n"
                 f"💾 Stored embeddings in ChromaDB"
+            )
+
+            if needs_ocr:
+                status_msg += "\n\n⚠️ Low extraction quality detected. Try 'Retry with OCR' below."
+
+            return status_msg, file_list
+
+    except Exception as e:
+        return f"❌ Error: {str(e)}", None
+
+def retry_with_ocr(input_id, ocr_method, class_name):
+    """
+    Re-process a file using OCR.
+
+    Args:
+        input_id: ID of input to retry (from dropdown)
+        ocr_method: 'tesseract', 'mathpix', or 'claude'
+        class_name: Current class name
+
+    Returns:
+        (status_message, updated_file_list)
+    """
+    if not input_id:
+        return "⚠️ Please select a file to retry", None
+
+    try:
+        with app.app_context():
+            input_obj = Input.query.get(input_id)
+            if not input_obj:
+                return "❌ File not found", None
+
+            file_path = UPLOAD_PATH / input_obj.file_path
+
+            # Import OCR functions
+            from app.pipelines.ocr import (
+                extract_pdf_with_tesseract,
+                extract_pdf_with_mathpix,
+                extract_pdf_with_claude_vision
+            )
+
+            # Select OCR method
+            try:
+                if ocr_method == 'tesseract':
+                    raw_text = extract_pdf_with_tesseract(str(file_path))
+                elif ocr_method == 'mathpix':
+                    raw_text = extract_pdf_with_mathpix(str(file_path))
+                elif ocr_method == 'claude':
+                    raw_text = extract_pdf_with_claude_vision(str(file_path))
+                else:
+                    return f"❌ Unknown OCR method: {ocr_method}", None
+            except RuntimeError as e:
+                # Feature disabled or dependencies missing
+                return f"❌ {str(e)}", None
+            except Exception as e:
+                return f"❌ OCR failed: {str(e)}", None
+
+            # Re-chunk and re-embed
+            delete_embeddings(input_obj.class_id, input_obj.name)
+            chunks = chunk_text(raw_text)
+            generate_embeddings(input_obj.class_id, input_obj.name, chunks)
+
+            # Update database
+            input_obj.raw_text = raw_text
+            input_obj.extraction_method = ocr_method
+            db.session.commit()
+
+            file_list = get_current_file_list(class_name)
+
+            return (
+                f"✅ Re-extracted with {ocr_method.capitalize()} OCR\n"
+                f"📄 Extracted {len(raw_text):,} characters\n"
+                f"🔢 Created {len(chunks)} chunks\n"
+                f"💾 Updated embeddings"
             ), file_list
 
     except Exception as e:
@@ -257,7 +354,7 @@ def handle_class_selection(selected_value: str):
     - If existing class: hide new class input, return selected name
     - If "Create New Class...": show new class input and create button
 
-    Returns: (class_name, new_class_visible, create_btn_visible, file_list, file_selector)
+    Returns: (class_name, new_class_visible, create_btn_visible, file_list, file_selector, ocr_file_selector)
     """
     if selected_value == "➕ Create New Class...":
         return (
@@ -265,28 +362,30 @@ def handle_class_selection(selected_value: str):
             gr.update(visible=True),  # new_class_input
             gr.update(visible=True),  # create_class_btn
             [],  # file_list (empty)
-            gr.update(choices=[], value=None)  # file_selector (empty)
+            gr.update(choices=[], value=None),  # file_selector (empty)
+            gr.update(choices=[], value=None)  # ocr_file_selector (empty)
         )
     else:
         # Existing class selected
+        file_choices = get_file_choices(selected_value)
         return (
             selected_value,  # class_name
             gr.update(visible=False),  # new_class_input
             gr.update(visible=False),  # create_class_btn
             get_current_file_list(selected_value),  # file_list
-            gr.update(choices=get_file_choices(selected_value), value=None)  # file_selector
+            gr.update(choices=file_choices, value=None),  # file_selector
+            gr.update(choices=file_choices, value=None)  # ocr_file_selector
         )
 
 def create_new_class(new_class_name: str):
     """
     Create a new class and update dropdown choices.
 
-    Returns: (updated_choices, selected_value, new_class_visible, create_btn_visible, status)
+    Returns: (dropdown_update, new_class_visible, create_btn_visible, status)
     """
     if not new_class_name or not new_class_name.strip():
         return (
-            get_all_classes(),  # Keep current choices
-            "➕ Create New Class...",  # Keep on create option
+            gr.update(choices=get_all_classes(), value="➕ Create New Class..."),  # Single update
             gr.update(visible=True),  # Keep input visible
             gr.update(visible=True),  # Keep button visible
             "⚠️ Please enter a class name"  # status
@@ -297,8 +396,7 @@ def create_new_class(new_class_name: str):
         existing = Class.query.filter_by(name=new_class_name).first()
         if existing:
             return (
-                get_all_classes(),
-                new_class_name,  # Select the existing class
+                gr.update(choices=get_all_classes(), value=new_class_name),  # Single update
                 gr.update(visible=False),
                 gr.update(visible=False),
                 f"✅ Switched to existing class: {new_class_name}"
@@ -313,12 +411,93 @@ def create_new_class(new_class_name: str):
         updated_choices = get_all_classes()
 
         return (
-            updated_choices,  # Dropdown choices with new class
-            new_class_name,  # Select the newly created class
+            gr.update(choices=updated_choices, value=new_class_name),  # Single update
             gr.update(visible=False),  # Hide new class input
             gr.update(visible=False),  # Hide create button
             f"✅ Created new class: {new_class_name}"  # status
         )
+
+def delete_class(class_name):
+    """
+    Delete a class and reset ALL UI state atomically.
+
+    Cascade deletes:
+    - All input files (database records + physical files + ChromaDB chunks)
+    - All flashcards
+    - All chat messages
+    - ChromaDB collection
+
+    Returns:
+        Tuple of 6 values:
+        1. upload_status (str) - Success/error message
+        2. class_selector (gr.update) - Refresh dropdown
+        3. file_list (list) - Empty list
+        4. new_class_input (gr.update) - Hide input
+        5. create_class_btn (gr.update) - Hide button
+        6. current_class_name (None) - Reset state
+    """
+    if not class_name or class_name == "➕ Create New Class...":
+        return (
+            "⚠️ Please select a valid class to delete",
+            gr.update(choices=get_all_classes(), value=None),
+            [],
+            gr.update(visible=False),
+            gr.update(visible=False),
+            None
+        )
+
+    with app.app_context():
+        try:
+            # Find class
+            class_obj = Class.query.filter_by(name=class_name).first()
+            if not class_obj:
+                return (
+                    f"⚠️ Class '{class_name}' not found",
+                    gr.update(choices=get_all_classes(), value=None),
+                    [],
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                    None
+                )
+
+            # Delete physical files
+            class_upload_dir = UPLOAD_PATH / str(class_obj.id)
+            if class_upload_dir.exists():
+                import shutil
+                shutil.rmtree(class_upload_dir)
+
+            # Delete ChromaDB collection
+            try:
+                client = get_chroma_client()
+                client.delete_collection(f"class_{class_obj.id}")
+            except Exception as e:
+                print(f"Warning: Could not delete ChromaDB collection: {e}")
+
+            # Delete database records (cascade will handle related records)
+            db.session.delete(class_obj)
+            db.session.commit()
+
+            # After deletion, reset dropdown and UI state
+            updated_choices = get_all_classes()
+            return (
+                f"✓ Class '{class_name}' deleted successfully",
+                gr.update(choices=updated_choices, value=None),
+                [],
+                gr.update(visible=False),
+                gr.update(visible=False),
+                None  # Reset current_class_name to None
+            )
+
+        except Exception as e:
+            db.session.rollback()
+            return (
+                f"❌ Error deleting class: {str(e)}",
+                gr.update(choices=get_all_classes(), value=None),
+                [],
+                gr.update(visible=False),
+                gr.update(visible=False),
+                None
+            )
 
 async def chat_with_materials(message, history, class_name):
     """
@@ -563,13 +742,21 @@ def build_ui():
             """
         )
 
-        class_selector = gr.Dropdown(
-            label="Select Class",
-            choices=[],  # Populated by get_all_classes() on load
-            value=None,  # Start with nothing selected
-            allow_custom_value=False,
-            interactive=True
-        )
+        with gr.Row():
+            class_selector = gr.Dropdown(
+                label="Select Class",
+                choices=[],  # Populated by get_all_classes() on load
+                value=None,  # Start with nothing selected
+                allow_custom_value=False,
+                interactive=True,
+                scale=3
+            )
+            delete_class_btn = gr.Button(
+                "🗑️ Delete Class",
+                variant="stop",
+                size="sm",
+                scale=1
+            )
 
         new_class_input = gr.Textbox(
             label="New Class Name",
@@ -593,8 +780,8 @@ def build_ui():
                 gr.Markdown("### 📤 Upload Materials")
 
                 file_upload = gr.File(
-                    label="Select PDF or Text File",
-                    file_types=['.pdf', '.txt', '.md', '.docx']
+                    label="Select PDF, PowerPoint, or Text File",
+                    file_types=['.pdf', '.txt', '.md', '.docx', '.pptx']
                 )
                 input_name = gr.Textbox(
                     label="Name this input",
@@ -602,7 +789,7 @@ def build_ui():
                 )
                 input_type = gr.Dropdown(
                     label="Input Type",
-                    choices=['slides', 'textbook', 'notes', 'recording', 'quiz'],
+                    choices=['slides', 'textbook', 'notes', 'recording', 'quiz', 'study guide'],
                     value='slides'
                 )
                 upload_btn = gr.Button("Upload & Ingest", variant="primary")
@@ -642,6 +829,27 @@ def build_ui():
                     with gr.Row():
                         confirm_clear_btn = gr.Button("Yes, Clear All", variant="stop")
                         cancel_clear_btn = gr.Button("Cancel")
+
+                # OCR Retry controls
+                gr.Markdown("---")
+                gr.Markdown("#### 🔄 Re-extract with OCR")
+                gr.Markdown("If text extraction quality is poor, try OCR:")
+
+                ocr_file_selector = gr.Dropdown(
+                    label="Select file to re-extract",
+                    choices=[],
+                    interactive=True
+                )
+
+                ocr_method_selector = gr.Radio(
+                    label="OCR Method",
+                    choices=["tesseract"],
+                    value="tesseract",
+                    info="Tesseract is free. Premium options require API keys."
+                )
+
+                retry_ocr_btn = gr.Button("🔄 Retry with OCR", variant="secondary", size="sm")
+                ocr_status = gr.Textbox(label="OCR Status", interactive=False, visible=False)
 
             with gr.Column(scale=2):
                 gr.Markdown("### 💬 Chat with Your Materials")
@@ -687,10 +895,12 @@ def build_ui():
 
         # Helper function for updating file controls
         def update_file_controls(class_name: str):
-            """Update both file_list and file_selector after changes"""
+            """Update file_list, file_selector, and ocr_file_selector after changes"""
+            file_choices = get_file_choices(class_name)
             return (
                 get_current_file_list(class_name),
-                gr.update(choices=get_file_choices(class_name), value=None)
+                gr.update(choices=file_choices, value=None),
+                gr.update(choices=file_choices, value=None)
             )
 
         # Event handlers
@@ -704,7 +914,8 @@ def build_ui():
                 new_class_input,     # Show/hide new class input
                 create_class_btn,    # Show/hide create button
                 file_list,           # Update file list
-                file_selector        # Update file selector
+                file_selector,       # Update file selector
+                ocr_file_selector    # Update OCR file selector
             ]
         )
 
@@ -713,8 +924,7 @@ def build_ui():
             fn=create_new_class,
             inputs=[new_class_input],
             outputs=[
-                class_selector,      # Update choices
-                class_selector,      # Update selected value (new class)
+                class_selector,      # Single output (updates both choices and value)
                 new_class_input,     # Hide input
                 create_class_btn,    # Hide button
                 upload_status        # Show status message
@@ -727,8 +937,24 @@ def build_ui():
                 new_class_input,
                 create_class_btn,
                 file_list,
-                file_selector
+                file_selector,
+                ocr_file_selector  # Added missing output
             ]
+        )
+
+        # Delete class event
+        delete_class_btn.click(
+            fn=delete_class,
+            inputs=[current_class_name],  # Use hidden state, not dropdown
+            outputs=[
+                upload_status,      # Status message
+                class_selector,     # Refresh dropdown
+                file_list,         # Clear file list
+                new_class_input,   # Hide new class input
+                create_class_btn,  # Hide create button
+                current_class_name # Reset hidden state
+            ],
+            show_progress=True
         )
 
         # Upload file event
@@ -743,7 +969,7 @@ def build_ui():
         ).then(
             fn=update_file_controls,
             inputs=[current_class_name],
-            outputs=[file_list, file_selector]
+            outputs=[file_list, file_selector, ocr_file_selector]
         )
 
         # Send message handler
@@ -804,7 +1030,7 @@ def build_ui():
         ).then(
             fn=update_file_controls,
             inputs=[current_class_name],
-            outputs=[file_list, file_selector]
+            outputs=[file_list, file_selector, ocr_file_selector]
         )
 
         # Clear all workflow
@@ -828,7 +1054,17 @@ def build_ui():
         ).then(
             fn=update_file_controls,
             inputs=[current_class_name],
-            outputs=[file_list, file_selector]
+            outputs=[file_list, file_selector, ocr_file_selector]
+        )
+
+        # OCR retry handler
+        retry_ocr_btn.click(
+            fn=retry_with_ocr,
+            inputs=[ocr_file_selector, ocr_method_selector, current_class_name],
+            outputs=[ocr_status, file_list]
+        ).then(
+            fn=lambda: gr.update(visible=True),
+            outputs=[ocr_status]
         )
 
         gen_flashcard_btn.click(
@@ -853,10 +1089,24 @@ def build_ui():
             """
         )
 
+        # Helper function for OCR methods
+        def get_ocr_methods():
+            from app.pipelines.ocr import get_available_ocr_methods
+            methods = get_available_ocr_methods()
+            if not methods:
+                methods = ['tesseract (install required)']
+            return gr.update(choices=methods, value=methods[0] if methods else None)
+
         # Initialize dropdown on app load
         demo.load(
             fn=lambda: gr.update(choices=get_all_classes()),
             outputs=[class_selector]
+        )
+
+        # Initialize OCR method selector on app load
+        demo.load(
+            fn=get_ocr_methods,
+            outputs=[ocr_method_selector]
         )
 
     return demo
