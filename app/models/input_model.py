@@ -16,6 +16,7 @@ class Input(db.Model):
     input_type = db.Column(db.String(50), nullable=False)
     file_path = db.Column(db.String(500))
     raw_text = db.Column(db.Text)
+    extraction_method = db.Column(db.String(50))  # 'pypdf', 'tesseract', 'mathpix', 'claude', 'pptx'
     summary = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

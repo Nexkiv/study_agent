@@ -5,6 +5,7 @@ File routing and text extraction based on file extensions.
 No agent reasoning - pure Python code paths.
 """
 from pathlib import Path
+from typing import Tuple
 import pypdf
 from docx import Document
 
@@ -35,10 +36,13 @@ def process_upload(file_path: str, class_id: int, input_name: str, input_type: s
         return extract_docx(file_path)
     elif ext == '.pdf':
         return extract_pdf(file_path)
+    elif ext == '.pptx':
+        from app.pipelines.ocr import extract_pptx
+        return extract_pptx(file_path)
     else:
         raise ValueError(
             f"Unsupported file type: {ext}. "
-            f"Supported formats: .txt, .md, .docx, .pdf"
+            f"Supported formats: .txt, .md, .docx, .pdf, .pptx"
         )
 
 
@@ -71,7 +75,7 @@ def extract_docx(file_path: str) -> str:
     return '\n\n'.join(paragraphs)
 
 
-def extract_pdf(file_path: str) -> str:
+def extract_pdf(file_path: str) -> Tuple[str, int, bool]:
     """
     Extract text from PDF files using pypdf.
 
@@ -79,17 +83,21 @@ def extract_pdf(file_path: str) -> str:
         file_path: Path to .pdf file
 
     Returns:
-        Extracted text from all pages
+        Tuple of (extracted_text, page_count, needs_ocr_flag)
 
     Note:
         For MVP, uses pypdf's basic text extraction.
-        Post-MVP: Add Mathpix OCR for STEM content,
-        Claude Vision for image-heavy PDFs.
+        If extraction quality is poor, suggests OCR via needs_ocr flag.
+        Phase 2.5: OCR fallback with Tesseract/Mathpix/Claude Vision.
     """
+    from app.pipelines.ocr import detect_poor_extraction
+
     text_parts = []
+    page_count = 0
 
     with open(file_path, 'rb') as f:
         pdf_reader = pypdf.PdfReader(f)
+        page_count = len(pdf_reader.pages)
 
         for page_num, page in enumerate(pdf_reader.pages):
             try:
@@ -101,7 +109,16 @@ def extract_pdf(file_path: str) -> str:
                 print(f"Warning: Failed to extract page {page_num + 1}: {e}")
                 continue
 
-    if not text_parts:
-        raise ValueError("No text could be extracted from PDF")
+    full_text = '\n\n'.join(text_parts) if text_parts else ""
 
-    return '\n\n'.join(text_parts)
+    # Check if OCR might help
+    needs_ocr, reason = detect_poor_extraction(full_text, page_count)
+
+    if needs_ocr:
+        print(f"OCR suggested: {reason}")
+
+    # Still raise error if completely empty
+    if not full_text.strip():
+        raise ValueError("No text could be extracted from PDF (try OCR)")
+
+    return full_text, page_count, needs_ocr

@@ -40,6 +40,15 @@ CHUNK_OVERLAP = 150
 DEFAULT_CHAT_MODEL = 'gpt-4o-mini'  # Phase 3: Using OpenAI for chat
 DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 
+# OCR Configuration
+TESSERACT_CMD = os.getenv('TESSERACT_CMD')  # Optional: override Tesseract path
+OCR_QUALITY_THRESHOLD = int(os.getenv('OCR_QUALITY_THRESHOLD', '100'))  # Min chars/page
+OCR_CHAR_DENSITY_THRESHOLD = float(os.getenv('OCR_CHAR_DENSITY_THRESHOLD', '0.5'))  # Alphanumeric ratio
+
+# Feature flags for premium OCR (disabled for MVP)
+ENABLE_MATHPIX_OCR = os.getenv('ENABLE_MATHPIX_OCR', 'false').lower() == 'true'
+ENABLE_CLAUDE_VISION_OCR = os.getenv('ENABLE_CLAUDE_VISION_OCR', 'false').lower() == 'true'
+
 def ensure_directories():
     """Create data directories if they don't exist."""
     UPLOAD_PATH.mkdir(parents=True, exist_ok=True)

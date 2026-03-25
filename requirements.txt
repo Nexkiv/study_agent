@@ -16,7 +16,13 @@ httpx>=0.25.0
 # Text Processing
 pypdf==4.0.0
 python-docx==1.1.0
+python-pptx==1.0.2
 langchain-text-splitters==0.3.0
+
+# OCR and Image Processing
+pdf2image==1.17.0
+pytesseract==0.3.10
+pillow>=10.0.0
 
 # UI (MVP - Gradio)
 gradio>=5.0.0
