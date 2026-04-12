@@ -148,23 +148,30 @@ CRITICAL: Do NOT make up information. If the uploaded materials don't contain th
 """
 
 
-def create_search_tool(class_name: str):
+def create_search_tool(class_name: str, default_n_results: int = 5):
     """
     Factory function for search tool with class context.
 
+    Args:
+        class_name: Name of the class to search
+        default_n_results: Default number of results (5 for chat, 20 for flashcards)
+
     Returns a tool function bound to specific class.
     """
-    async def search_class_materials(query: str, n_results: int = 5) -> str:
+    async def search_class_materials(query: str, n_results: int = None) -> str:
         """
         Search uploaded class materials using semantic similarity.
 
         Args:
             query: Search query (natural language)
-            n_results: Number of results to return (default 5)
+            n_results: Number of results to return (uses default if not specified)
 
         Returns:
             Formatted search results with source attribution
         """
+        # Use default if not specified
+        if n_results is None:
+            n_results = default_n_results
         try:
             # Get class from database
             class_obj = Class.query.filter_by(name=class_name).first()

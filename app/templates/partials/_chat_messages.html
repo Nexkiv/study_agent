@@ -1,0 +1,7 @@
+{% for msg in messages %}
+<div class="flex {% if msg.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
+    <div class="max-w-[80%] rounded-lg px-4 py-3 {% if msg.role == 'user' %}bg-blue-600 text-white{% else %}bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100{% endif %}">
+        <div class="text-sm whitespace-pre-wrap">{{ msg.content }}</div>
+    </div>
+</div>
+{% endfor %}

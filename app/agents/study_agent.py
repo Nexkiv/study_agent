@@ -342,7 +342,7 @@ async def generate_flashcards_for_topic(
                     deduplicated.append(card)
 
             duplicate_count = original_count - len(deduplicated)
-            status = f"Agent completed successfully. Generated {original_count} flashcards, removed {duplicate_count} duplicates. Final count: {len(deduplicated)}."
+            status = f"Generated {len(deduplicated)} flashcards."
             logger.info(status)
             return deduplicated, status
         else:

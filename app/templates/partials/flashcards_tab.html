@@ -1,0 +1,115 @@
+<!-- Generate Section -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Generate Flashcards</h2>
+
+    <div class="flex gap-4 mb-4">
+        <div class="flex-1">
+            <div class="flex items-center gap-1 mb-1">
+                <label for="flashcard-topic" class="text-sm font-medium text-gray-700 dark:text-gray-300">Focus area (optional)</label>
+                <span class="text-gray-400 cursor-help text-xs" title="Narrow flashcard generation to a specific topic. Results depend on your uploaded materials.">?</span>
+            </div>
+            <input type="text" id="flashcard-topic" placeholder="e.g., Baroque period"
+                class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Leave blank to generate from all course materials.</p>
+        </div>
+        <div class="w-52">
+            <label for="flashcard-count" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Count: <span id="flashcard-count-display">15</span>
+            </label>
+            <div class="flex items-center gap-2 mt-1">
+                <span class="text-xs text-gray-400">5</span>
+                <input type="range" id="flashcard-count" min="5" max="50" value="15" step="5"
+                    oninput="document.getElementById('flashcard-count-display').textContent=this.value"
+                    class="flex-1">
+                <span class="text-xs text-gray-400">50</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex items-center gap-4">
+        <button onclick="generateFlashcards()" id="generate-btn"
+            class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            Generate Flashcards
+        </button>
+        <span id="flashcard-status" class="text-sm"></span>
+    </div>
+</div>
+
+<!-- Flashcard Table -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">Generated Flashcards</h2>
+        <span id="flashcard-total-count" class="text-sm text-gray-500 dark:text-gray-400"></span>
+    </div>
+
+    <!-- Set selector (custom dropdown) -->
+    <div id="flashcard-sets-container" class="hidden mb-4">
+        <div class="flex items-center gap-3">
+            <div id="set-dropdown" class="relative flex-1">
+                <button type="button" id="set-dropdown-btn" onclick="toggleSetDropdown()"
+                    class="w-full flex items-center justify-between rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-left focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-controls="set-dropdown-list">
+                    <span id="set-dropdown-label">All sets</span>
+                    <svg class="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <ul id="set-dropdown-list" class="hidden absolute z-20 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto py-1"
+                    role="listbox">
+                </ul>
+            </div>
+            <button onclick="confirmDeleteSet()" id="delete-set-btn" class="hidden p-2 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors" title="Delete this set">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Search (hidden until flashcards exist) -->
+    <div id="flashcard-search-container" class="hidden mb-4">
+        <input type="text" id="flashcard-search" placeholder="Search flashcards..."
+            oninput="filterFlashcards(this.value)"
+            class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+    </div>
+
+    <div id="flashcard-table-container">
+        <p class="text-sm text-gray-500 dark:text-gray-400 italic">No flashcards yet. Generate some above.</p>
+    </div>
+
+    <!-- Pagination -->
+    <div id="flashcard-pagination" class="hidden flex items-center justify-between mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <button onclick="changePage(-1)" id="prev-page-btn" class="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            &larr; Previous
+        </button>
+        <span id="page-info" class="text-sm text-gray-500 dark:text-gray-400"></span>
+        <button onclick="changePage(1)" id="next-page-btn" class="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            Next &rarr;
+        </button>
+    </div>
+</div>
+
+<!-- Export Section -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+    <h2 class="text-lg font-semibold mb-4">Export</h2>
+
+    <div class="flex items-center gap-6">
+        <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name="export-format" value="quizlet" checked
+                class="text-blue-600 focus:ring-blue-500 mt-1">
+            <div>
+                <span class="text-sm">Quizlet (TSV)</span>
+                <p class="text-xs text-gray-400">For importing to Quizlet.com</p>
+            </div>
+        </label>
+        <label class="flex items-start gap-2 cursor-pointer">
+            <input type="radio" name="export-format" value="anki"
+                class="text-blue-600 focus:ring-blue-500 mt-1">
+            <div>
+                <span class="text-sm">Anki (CSV)</span>
+                <p class="text-xs text-gray-400">For the Anki desktop app</p>
+            </div>
+        </label>
+        <button onclick="exportFlashcards()" id="export-btn"
+            class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <span id="export-btn-text">Export All Saved</span>
+        </button>
+        <span id="export-status" class="text-sm"></span>
+    </div>
+</div>

@@ -1,0 +1,20 @@
+{% if flashcards %}
+<table class="w-full text-sm">
+    <thead>
+        <tr class="border-b border-gray-200 dark:border-gray-700">
+            <th class="text-left py-2 px-3 font-medium text-gray-700 dark:text-gray-300 w-[30%]">Term</th>
+            <th class="text-left py-2 px-3 font-medium text-gray-700 dark:text-gray-300 w-[70%]">Definition</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for fc in flashcards %}
+        <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50" data-id="{{ fc.id }}">
+            <td class="py-2 px-3 align-top font-medium">{{ fc.term }}</td>
+            <td class="py-2 px-3 align-top">{{ fc.definition }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-sm text-gray-500 dark:text-gray-400 italic">No flashcards yet. Generate some above.</p>
+{% endif %}

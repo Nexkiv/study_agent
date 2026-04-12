@@ -1,0 +1,83 @@
+<!-- Upload Form -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Upload Course Material</h2>
+
+    <form id="upload-form" enctype="multipart/form-data" onsubmit="return handleUpload(event)">
+        <!-- Drop zone -->
+        <div id="drop-zone"
+            class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-8 text-center mb-4 cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
+            onclick="document.getElementById('file-input').click()">
+            <svg class="mx-auto h-10 w-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 16V4m0 0l-4 4m4-4l4 4M4 14v4a2 2 0 002 2h12a2 2 0 002-2v-4"/>
+            </svg>
+            <p class="text-sm text-gray-600 dark:text-gray-400">Drop file here or click to upload</p>
+            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">PDF, DOCX, TXT, MD, PPTX</p>
+            <input type="file" id="file-input" name="file" accept=".pdf,.docx,.txt,.md,.pptx" class="hidden" onchange="onFileSelected(this)">
+        </div>
+
+        <!-- File name display -->
+        <p id="selected-file-name" class="text-sm text-gray-500 dark:text-gray-400 mb-4 hidden"></p>
+
+        <!-- Document Name + Type -->
+        <div class="flex gap-4 mb-4">
+            <div class="flex-1">
+                <label for="doc-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Document Name</label>
+                <input type="text" id="doc-name" name="name" placeholder="e.g., Lecture 1: Renaissance"
+                    class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+            </div>
+            <div class="w-48">
+                <label for="doc-type" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Material Type</label>
+                <select id="doc-type" name="type"
+                    class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <option value="slides">Slides</option>
+                    <option value="textbook">Textbook</option>
+                    <option value="notes">Notes</option>
+                    <option value="recording">Recording</option>
+                    <option value="quiz">Quiz</option>
+                    <option value="study guide">Study Guide</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Upload button + status -->
+        <div class="flex items-center gap-4">
+            <button type="submit" id="upload-btn"
+                class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                Upload &amp; Process
+            </button>
+            <span id="upload-status" class="text-sm"></span>
+        </div>
+    </form>
+</div>
+
+<!-- Uploaded Materials Table -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <h2 class="text-lg font-semibold mb-4">Uploaded Materials</h2>
+    <div id="file-list-container">
+        <p class="text-sm text-gray-500 dark:text-gray-400 italic">Select a class to see uploaded materials.</p>
+    </div>
+</div>
+
+<!-- OCR Tools (separate section, not hidden in accordion) -->
+<div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Improve Text Extraction (OCR)</h3>
+    <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">If your PDF contains scanned pages or images of text (not selectable text), use OCR to re-extract the content.</p>
+
+    <div class="flex gap-4 items-end">
+        <div class="flex-1">
+            <label for="ocr-file-select" class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">File</label>
+            <select id="ocr-file-select"
+                class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm">
+                <option value="">Choose a file...</option>
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Method</label>
+            <div id="ocr-methods" class="flex gap-3"></div>
+        </div>
+        <button onclick="retryOcr()" class="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded-lg transition-colors whitespace-nowrap">
+            Retry OCR
+        </button>
+    </div>
+    <p id="ocr-status" class="text-sm mt-2"></p>
+</div>

@@ -388,7 +388,7 @@ def create_new_class(new_class_name: str):
             gr.update(choices=get_all_classes(), value="➕ Create New Class..."),  # Single update
             gr.update(visible=True),  # Keep input visible
             gr.update(visible=True),  # Keep button visible
-            "⚠️ Please enter a class name"  # status
+            "⚠️ Please enter a class name."  # status
         )
 
     with app.app_context():
@@ -399,7 +399,7 @@ def create_new_class(new_class_name: str):
                 gr.update(choices=get_all_classes(), value=new_class_name),  # Single update
                 gr.update(visible=False),
                 gr.update(visible=False),
-                f"✅ Switched to existing class: {new_class_name}"
+                f"✅ Switched to existing class: {new_class_name}."
             )
 
         # Create new class
@@ -414,7 +414,7 @@ def create_new_class(new_class_name: str):
             gr.update(choices=updated_choices, value=new_class_name),  # Single update
             gr.update(visible=False),  # Hide new class input
             gr.update(visible=False),  # Hide create button
-            f"✅ Created new class: {new_class_name}"  # status
+            f"✅ Created new class: {new_class_name}."  # status
         )
 
 def delete_class(class_name):
@@ -438,7 +438,7 @@ def delete_class(class_name):
     """
     if not class_name or class_name == "➕ Create New Class...":
         return (
-            "⚠️ Please select a valid class to delete",
+            "⚠️ Please select a valid class to delete.",
             gr.update(choices=get_all_classes(), value=None),
             [],
             gr.update(visible=False),
@@ -480,7 +480,7 @@ def delete_class(class_name):
             # After deletion, reset dropdown and UI state
             updated_choices = get_all_classes()
             return (
-                f"✓ Class '{class_name}' deleted successfully",
+                f"✅ Class '{class_name}' deleted successfully.",
                 gr.update(choices=updated_choices, value=None),
                 [],
                 gr.update(visible=False),
@@ -650,17 +650,19 @@ def generate_flashcards(class_name, topic):
             # Format for Gradio dataframe
             dataframe_data = [[card['term'], card['definition']] for card in flashcards]
 
-            success_msg = (
-                f"✅ Generated {len(flashcards)} flashcards on: {topic}\n"
-                f"{agent_status}"
-            )
+            total_count = Flashcard.query.filter_by(class_id=class_obj.id).count()
+            success_msg = f"✅ {len(flashcards)} flashcards generated from {class_name} materials."
+            if total_count > len(flashcards):
+                success_msg += f" ({total_count} total saved for this class)"
 
             return success_msg, dataframe_data
 
     except Exception as e:
-        error_msg = f"❌ Error generating flashcards: {str(e)}"
-        print(error_msg)  # Log to console
-        return error_msg, None
+        error_str = str(e)
+        print(f"❌ Error generating flashcards: {error_str}")
+        if "context_length_exceeded" in error_str or "context window" in error_str:
+            return "❌ Your materials are too large to process at once. Try a more specific topic, or remove some files and try again.", None
+        return "❌ Something went wrong generating flashcards. Please try again.", None
 
 def export_flashcards(class_name, format_choice):
     """
@@ -674,20 +676,20 @@ def export_flashcards(class_name, format_choice):
         File path for Gradio download, or None if no flashcards
     """
     if not class_name:
-        return None
+        return None, "⚠️ Please select a class first."
 
     try:
         with app.app_context():
             # Get class
             class_obj = Class.query.filter_by(name=class_name).first()
             if not class_obj:
-                return None
+                return None, "⚠️ Class not found."
 
             # Get all flashcards for this class
             flashcards = Flashcard.query.filter_by(class_id=class_obj.id).all()
 
             if not flashcards:
-                return None
+                return None, "⚠️ No flashcards to export. Generate flashcards first."
 
             # Convert to dict format
             cards_data = [
@@ -710,11 +712,11 @@ def export_flashcards(class_name, format_choice):
             file_path = export_path / filename
             file_path.write_text(content, encoding='utf-8')
 
-            return str(file_path)
+            return str(file_path), f"✅ Exported all {len(cards_data)} saved flashcards as {filename}"
 
     except Exception as e:
         print(f"Export error: {e}")
-        return None
+        return None, f"❌ Export error: {e}"
 
 def clear_chat():
     """
@@ -734,66 +736,89 @@ def build_ui():
 
         gr.Markdown(
             """
-            # 🎨 StudyAgent - Art History Study Tool
-
-            **Hybrid AI Architecture**: Deterministic pipelines + agentic features
-
-            Upload PDFs → Chat with materials via RAG → Generate flashcards → Export to Quizlet
+            # StudyAgent
+            **Art History** · AI-powered study assistant. Upload course materials, chat with them, and generate flashcards.
+            ---
             """
         )
 
-        with gr.Row():
-            class_selector = gr.Dropdown(
-                label="Select Class",
-                choices=[],  # Populated by get_all_classes() on load
-                value=None,  # Start with nothing selected
-                allow_custom_value=False,
-                interactive=True,
-                scale=3
-            )
-            delete_class_btn = gr.Button(
-                "🗑️ Delete Class",
-                variant="stop",
-                size="sm",
-                scale=1
-            )
-
-        new_class_input = gr.Textbox(
-            label="New Class Name",
-            placeholder="e.g., Art History 101",
-            visible=False,
-            interactive=True
+        welcome_banner = gr.Markdown(
+            "No classes yet. Click **+ New Class** above to get started.",
+            visible=True
         )
 
-        create_class_btn = gr.Button(
-            "Create Class",
-            variant="primary",
-            size="sm",
-            visible=False
-        )
+        # Class selector group with inline new-class form
+        with gr.Group():
+            with gr.Row():
+                class_selector = gr.Dropdown(
+                    label="",
+                    choices=[],
+                    value=None,
+                    allow_custom_value=False,
+                    interactive=True,
+                    scale=3
+                )
+                new_class_btn = gr.Button(
+                    "+ New Class",
+                    variant="primary",
+                    size="sm",
+                    scale=1
+                )
+                delete_class_btn = gr.Button(
+                    "🗑️ Delete Class",
+                    variant="stop",
+                    size="sm",
+                    scale=1
+                )
+            with gr.Row(visible=False) as new_class_container:
+                new_class_input = gr.Textbox(
+                    label="New Class Name",
+                    placeholder="e.g., Art History 101",
+                    interactive=True,
+                    scale=2
+                )
+                create_class_btn = gr.Button(
+                    "Create Class",
+                    variant="primary",
+                    size="sm",
+                    scale=1
+                )
 
-        # Hidden state to track current class name
+        # Delete class confirmation modal
+        with gr.Group(visible=False) as delete_class_modal:
+            gr.Markdown("### ⚠️ Delete Class?")
+            delete_class_warning = gr.Markdown()
+            with gr.Row():
+                confirm_delete_class_btn = gr.Button("Yes, Delete Everything", variant="stop")
+                cancel_delete_class_btn = gr.Button("Cancel")
+
+        # Hidden state
         current_class_name = gr.State(value=None)
+        saved_msg = gr.State(value="")
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### 📤 Upload Materials")
+        with gr.Tabs() as tabs:
 
+            # === TAB 1: Classes & Materials ===
+            with gr.Tab("📚 Classes & Materials", id="classes_tab"):
                 file_upload = gr.File(
-                    label="Select PDF, PowerPoint, or Text File",
-                    file_types=['.pdf', '.txt', '.md', '.docx', '.pptx']
+                    label="Upload Course Material",
+                    file_types=['.pdf', '.txt', '.md', '.docx', '.pptx'],
+                    height=120
                 )
-                input_name = gr.Textbox(
-                    label="Name this input",
-                    placeholder="e.g., Lecture 1: Renaissance"
-                )
-                input_type = gr.Dropdown(
-                    label="Input Type",
-                    choices=['slides', 'textbook', 'notes', 'recording', 'quiz', 'study guide'],
-                    value='slides'
-                )
+                with gr.Row():
+                    input_name = gr.Textbox(
+                        label="Document Name",
+                        placeholder="e.g., Lecture 1: Renaissance",
+                        scale=2
+                    )
+                    input_type = gr.Dropdown(
+                        label="Material Type",
+                        choices=['slides', 'textbook', 'notes', 'recording', 'quiz', 'study guide'],
+                        value='slides',
+                        scale=1
+                    )
                 upload_btn = gr.Button("Upload & Ingest", variant="primary")
-                upload_status = gr.Textbox(label="Status", interactive=False)
+                upload_status = gr.Markdown(value="")
 
                 file_list = gr.Dataframe(
                     headers=["Name", "Type", "Status"],
@@ -801,88 +826,98 @@ def build_ui():
                     interactive=False
                 )
 
-                # File deletion controls
-                gr.Markdown("---")
-                gr.Markdown("#### 🗑️ File Management")
+                with gr.Accordion(label="🔧 Advanced File Tools", open=False):
 
-                file_selector = gr.Dropdown(
-                    label="Select file to delete",
-                    choices=[],
-                    interactive=True
-                )
+                    gr.Markdown("#### 📂 Manage Uploaded Files")
 
-                with gr.Row():
-                    delete_btn = gr.Button("Delete Selected", variant="stop", size="sm")
-                    clear_all_btn = gr.Button("Clear All Files", variant="stop", size="sm")
+                    file_selector = gr.Dropdown(
+                        label="Select file to delete",
+                        choices=[],
+                        interactive=True
+                    )
 
-                # Confirmation modals (hidden by default)
-                with gr.Group(visible=False) as delete_confirm_modal:
-                    gr.Markdown("### ⚠️ Confirm Deletion")
-                    delete_confirm_text = gr.Markdown()
                     with gr.Row():
-                        confirm_delete_btn = gr.Button("Yes, Delete", variant="stop")
-                        cancel_delete_btn = gr.Button("Cancel")
+                        delete_btn = gr.Button("Delete Selected", variant="stop", size="sm")
+                        clear_all_btn = gr.Button("Clear All Files", variant="stop", size="sm")
 
-                with gr.Group(visible=False) as clear_confirm_modal:
-                    gr.Markdown("### ⚠️ Delete ALL Files?")
-                    gr.Markdown("This will delete all uploaded materials and cannot be undone!")
-                    with gr.Row():
-                        confirm_clear_btn = gr.Button("Yes, Clear All", variant="stop")
-                        cancel_clear_btn = gr.Button("Cancel")
+                    with gr.Group(visible=False) as delete_confirm_modal:
+                        gr.Markdown("### ⚠️ Confirm Deletion")
+                        delete_confirm_text = gr.Markdown()
+                        with gr.Row():
+                            confirm_delete_btn = gr.Button("Yes, Delete", variant="stop")
+                            cancel_delete_btn = gr.Button("Cancel")
 
-                # OCR Retry controls
-                gr.Markdown("---")
-                gr.Markdown("#### 🔄 Re-extract with OCR")
-                gr.Markdown("If text extraction quality is poor, try OCR:")
+                    with gr.Group(visible=False) as clear_confirm_modal:
+                        gr.Markdown("### ⚠️ Delete ALL Files?")
+                        gr.Markdown("This will delete all uploaded materials and cannot be undone!")
+                        with gr.Row():
+                            confirm_clear_btn = gr.Button("Yes, Clear All", variant="stop")
+                            cancel_clear_btn = gr.Button("Cancel")
 
-                ocr_file_selector = gr.Dropdown(
-                    label="Select file to re-extract",
-                    choices=[],
-                    interactive=True
-                )
+                    gr.Markdown("---")
+                    gr.Markdown("#### 🔍 Improve Text Extraction (OCR)")
+                    gr.Markdown("If your PDF contains scanned pages or images of text (not selectable text), use OCR to re-extract the content:")
 
-                ocr_method_selector = gr.Radio(
-                    label="OCR Method",
-                    choices=["tesseract"],
-                    value="tesseract",
-                    info="Tesseract is free. Premium options require API keys."
-                )
+                    ocr_file_selector = gr.Dropdown(
+                        label="Select file to re-extract",
+                        choices=[],
+                        interactive=True
+                    )
 
-                retry_ocr_btn = gr.Button("🔄 Retry with OCR", variant="secondary", size="sm")
-                ocr_status = gr.Textbox(label="OCR Status", interactive=False, visible=False)
+                    ocr_method_selector = gr.Radio(
+                        label="OCR Method",
+                        choices=["tesseract"],
+                        value="tesseract",
+                        info="Tesseract is free. Premium options require API keys."
+                    )
 
-            with gr.Column(scale=2):
-                gr.Markdown("### 💬 Chat with Your Materials")
+                    retry_ocr_btn = gr.Button("🔄 Retry with OCR", variant="secondary", size="sm")
+                    ocr_status = gr.Markdown(value="")
 
+            # === TAB 2: Chat ===
+            with gr.Tab("💬 Chat", id="chat_tab"):
                 chatbot = gr.Chatbot(
-                    label="RAG Agent",
-                    height=400
+                    label="AI Study Assistant",
+                    height=500,
+                    autoscroll=True,
+                    editable=None,
+                    buttons=["copy"],
+                    placeholder="Ask a question about your uploaded materials, or upload some first from the Classes & Materials tab."
                 )
                 chat_input = gr.Textbox(
-                    label="Ask a question",
-                    placeholder="e.g., What are key characteristics of Baroque art? (Press Enter to send)",
+                    show_label=False,
+                    placeholder="Ask a question... (Press Enter to send)",
                     lines=1,
                     max_lines=1,
                     submit_btn=True
                 )
-                chat_btn = gr.Button("Send", variant="primary")
-                clear_chat_btn = gr.Button("Clear Chat", variant="secondary", size="sm")
+                with gr.Row():
+                    chat_btn = gr.Button("Send", variant="primary")
+                    clear_chat_btn = gr.Button("Clear Chat", variant="secondary", size="sm")
 
-            with gr.Column(scale=1):
-                gr.Markdown("### 🃏 Flashcards")
+                with gr.Group(visible=False) as clear_chat_modal:
+                    gr.Markdown("### ⚠️ Clear Chat?")
+                    gr.Markdown("Clear all chat history for this class? This can't be undone.")
+                    with gr.Row():
+                        confirm_clear_chat_btn = gr.Button("Yes, Clear", variant="stop")
+                        cancel_clear_chat_btn = gr.Button("Cancel")
 
+            # === TAB 3: Flashcards & Export ===
+            with gr.Tab("🃏 Flashcards & Export", id="flashcards_tab"):
                 flashcard_topic = gr.Textbox(
-                    label="Topic (optional)",
-                    placeholder="e.g., Baroque period"
+                    label="Focus area (optional)",
+                    placeholder="e.g., Baroque period — narrows the search, but results depend on your materials"
                 )
                 gen_flashcard_btn = gr.Button("✨ Generate Flashcards", variant="primary")
 
-                flashcard_status = gr.Textbox(label="Status", interactive=False)
+                flashcard_status = gr.Markdown(value="")
 
                 flashcard_table = gr.Dataframe(
                     headers=["Term", "Definition"],
                     label="Generated Flashcards",
-                    interactive=False
+                    interactive=False,
+                    wrap=True,
+                    column_widths=["30%", "70%"]
                 )
 
                 export_format = gr.Radio(
@@ -890,8 +925,8 @@ def build_ui():
                     choices=["Quizlet (TSV)", "Anki (CSV)"],
                     value="Quizlet (TSV)"
                 )
-                export_btn = gr.Button("💾 Export")
-                export_file = gr.File(label="Download")
+                export_btn = gr.Button("💾 Export", variant="secondary")
+                export_file = gr.File(label="Download", visible=False)
 
         # Helper function for updating file controls
         def update_file_controls(class_name: str):
@@ -905,56 +940,122 @@ def build_ui():
 
         # Event handlers
 
-        # Class selection event
+        # Chat helpers for optimistic display
+        def append_user_message(message, history):
+            """Immediately show user message in chat."""
+            if not message or not message.strip():
+                return history, "", message
+            return history + [{"role": "user", "content": message}], "", message
+
+        async def fetch_response(history, class_name, original_msg):
+            """Call agent and append response."""
+            if not original_msg or not original_msg.strip():
+                return history
+            prior = history[:-1]  # Remove user msg we just appended
+            return await chat_with_materials(original_msg, prior, class_name)
+
+        # "+ New Class" button — show inline form
+        new_class_btn.click(
+            fn=lambda: (gr.update(visible=True), gr.update(value="➕ Create New Class...")),
+            outputs=[new_class_container, class_selector]
+        )
+
+        # Class selection event — reset statuses across tabs
         class_selector.change(
             fn=handle_class_selection,
             inputs=[class_selector],
             outputs=[
-                current_class_name,  # Hidden state
-                new_class_input,     # Show/hide new class input
-                create_class_btn,    # Show/hide create button
-                file_list,           # Update file list
-                file_selector,       # Update file selector
-                ocr_file_selector    # Update OCR file selector
+                current_class_name,
+                new_class_container,
+                create_class_btn,
+                file_list,
+                file_selector,
+                ocr_file_selector
             ]
+        ).then(
+            fn=lambda cls: gr.update(visible=(cls is None or cls == "➕ Create New Class...")),
+            inputs=[class_selector],
+            outputs=[welcome_banner]
+        ).then(
+            fn=lambda: ("", ""),
+            outputs=[upload_status, flashcard_status]
         )
 
-        # Create new class event
+        # Create new class event — auto-navigate to Classes tab
         create_class_btn.click(
             fn=create_new_class,
             inputs=[new_class_input],
             outputs=[
-                class_selector,      # Single output (updates both choices and value)
-                new_class_input,     # Hide input
-                create_class_btn,    # Hide button
-                upload_status        # Show status message
+                class_selector,
+                new_class_input,
+                create_class_btn,
+                upload_status
             ]
         ).then(
-            fn=handle_class_selection,  # Trigger selection handler for new class
+            fn=handle_class_selection,
             inputs=[class_selector],
             outputs=[
                 current_class_name,
-                new_class_input,
+                new_class_container,
                 create_class_btn,
                 file_list,
                 file_selector,
-                ocr_file_selector  # Added missing output
+                ocr_file_selector
             ]
+        ).then(
+            fn=lambda: (gr.update(visible=False), "", gr.Tabs(selected="classes_tab")),
+            outputs=[welcome_banner, flashcard_status, tabs]
         )
 
-        # Delete class event
+        # Delete class — two-step confirmation
+        def show_delete_class_warning(class_name):
+            if not class_name or class_name == "➕ Create New Class...":
+                return gr.update(visible=False), ""
+            return (
+                gr.update(visible=True),
+                f"This will permanently delete **{class_name}** and all its files, flashcards, and chat history."
+            )
+
         delete_class_btn.click(
+            fn=show_delete_class_warning,
+            inputs=[current_class_name],
+            outputs=[delete_class_modal, delete_class_warning]
+        )
+
+        cancel_delete_class_btn.click(
+            fn=lambda: gr.update(visible=False),
+            outputs=[delete_class_modal]
+        )
+
+        confirm_delete_class_btn.click(
             fn=delete_class,
-            inputs=[current_class_name],  # Use hidden state, not dropdown
+            inputs=[current_class_name],
             outputs=[
-                upload_status,      # Status message
-                class_selector,     # Refresh dropdown
-                file_list,         # Clear file list
-                new_class_input,   # Hide new class input
-                create_class_btn,  # Hide create button
-                current_class_name # Reset hidden state
+                upload_status,
+                class_selector,
+                file_list,
+                new_class_input,
+                create_class_btn,
+                current_class_name
             ],
             show_progress=True
+        ).then(
+            fn=lambda: (gr.update(visible=False), gr.update(visible=True), ""),
+            outputs=[delete_class_modal, welcome_banner, flashcard_status]
+        )
+
+        # Auto-populate document name from filename
+        def auto_populate_name(file):
+            if file is None:
+                return ""
+            name = Path(file.name).stem
+            name = name.replace('_', ' ').replace('-', ' ')
+            return name.title()
+
+        file_upload.change(
+            fn=auto_populate_name,
+            inputs=[file_upload],
+            outputs=[input_name]
         )
 
         # Upload file event
@@ -962,9 +1063,9 @@ def build_ui():
             fn=upload_file,
             inputs=[file_upload, current_class_name, input_name, input_type],
             outputs=[upload_status, file_list],
-            show_progress="hidden"  # Disable automatic output component highlighting
+            show_progress="hidden"
         ).then(
-            fn=lambda: gr.update(choices=get_all_classes()),  # Refresh dropdown
+            fn=lambda: gr.update(choices=get_all_classes()),
             outputs=[class_selector]
         ).then(
             fn=update_file_controls,
@@ -972,47 +1073,60 @@ def build_ui():
             outputs=[file_list, file_selector, ocr_file_selector]
         )
 
-        # Send message handler
+        # Send message handler (optimistic display)
         chat_btn.click(
-            fn=chat_with_materials,
-            inputs=[chat_input, chatbot, current_class_name],
-            outputs=[chatbot]
+            fn=append_user_message,
+            inputs=[chat_input, chatbot],
+            outputs=[chatbot, chat_input, saved_msg]
         ).then(
-            fn=lambda: "",  # Clear input after send
-            outputs=[chat_input]
+            fn=fetch_response,
+            inputs=[chatbot, current_class_name, saved_msg],
+            outputs=[chatbot]
         )
 
-        # Clear chat handler
+        # Clear chat — two-step confirmation
         clear_chat_btn.click(
+            fn=lambda: gr.update(visible=True),
+            outputs=[clear_chat_modal]
+        )
+
+        cancel_clear_chat_btn.click(
+            fn=lambda: gr.update(visible=False),
+            outputs=[clear_chat_modal]
+        )
+
+        confirm_clear_chat_btn.click(
             fn=clear_chat,
             outputs=[chatbot]
-        )
-
-        # Submit on Enter key (Shift+Enter for newline handled automatically)
-        chat_input.submit(
-            fn=chat_with_materials,
-            inputs=[chat_input, chatbot, current_class_name],
-            outputs=[chatbot]
         ).then(
-            fn=lambda: "",  # Clear input after send
-            outputs=[chat_input]
+            fn=lambda: gr.update(visible=False),
+            outputs=[clear_chat_modal]
         )
 
-        # Individual delete workflow
-        def show_delete_confirmation(selected_input_id, class_name):
-            """Show confirmation modal with file name"""
-            if not selected_input_id:
-                return gr.update(visible=False), ""
+        # Submit on Enter key (optimistic display)
+        chat_input.submit(
+            fn=append_user_message,
+            inputs=[chat_input, chatbot],
+            outputs=[chatbot, chat_input, saved_msg]
+        ).then(
+            fn=fetch_response,
+            inputs=[chatbot, current_class_name, saved_msg],
+            outputs=[chatbot]
+        )
 
-            # Get file name from choices
-            choices_dict = dict(get_file_choices(class_name))
+        # Individual file delete workflow
+        def show_delete_confirmation(selected_input_id, class_name):
+            """Show confirmation modal with file name."""
+            if not selected_input_id:
+                return gr.update(visible=False), "", "⚠️ Please select a file to delete."
+            choices_dict = {v: k for k, v in get_file_choices(class_name)}
             file_name = choices_dict.get(selected_input_id, 'Unknown')
-            return gr.update(visible=True), f"Delete **{file_name}**?"
+            return gr.update(visible=True), f"Delete **{file_name}**?", ""
 
         delete_btn.click(
             fn=show_delete_confirmation,
             inputs=[file_selector, current_class_name],
-            outputs=[delete_confirm_modal, delete_confirm_text]
+            outputs=[delete_confirm_modal, delete_confirm_text, upload_status]
         )
 
         cancel_delete_btn.click(
@@ -1033,7 +1147,7 @@ def build_ui():
             outputs=[file_list, file_selector, ocr_file_selector]
         )
 
-        # Clear all workflow
+        # Clear all files workflow
         clear_all_btn.click(
             fn=lambda: gr.update(visible=True),
             outputs=[clear_confirm_modal]
@@ -1062,9 +1176,6 @@ def build_ui():
             fn=retry_with_ocr,
             inputs=[ocr_file_selector, ocr_method_selector, current_class_name],
             outputs=[ocr_status, file_list]
-        ).then(
-            fn=lambda: gr.update(visible=True),
-            outputs=[ocr_status]
         )
 
         gen_flashcard_btn.click(
@@ -1073,20 +1184,15 @@ def build_ui():
             outputs=[flashcard_status, flashcard_table]
         )
 
+        # Export with feedback and show/hide download
         export_btn.click(
             fn=export_flashcards,
             inputs=[current_class_name, export_format],
+            outputs=[export_file, flashcard_status]
+        ).then(
+            fn=lambda f: gr.update(visible=(f is not None)),
+            inputs=[export_file],
             outputs=[export_file]
-        )
-
-        gr.Markdown(
-            """
-            ---
-            **Phase 1**: Upload files, save to database ✅
-            **Phase 2**: Text extraction, chunking, embedding ✅
-            **Phase 3**: RAG chat agent (search + web search + code execution + spelling correction) ✅
-            **Phase 4**: Flashcard generation with structured outputs + CSV export ✅
-            """
         )
 
         # Helper function for OCR methods
@@ -1118,5 +1224,12 @@ if __name__ == '__main__':
         server_name="127.0.0.1",
         server_port=7860,
         share=False,
-        theme=gr.themes.Soft(primary_hue="indigo")
+        theme=gr.themes.Soft(),
+        css="""
+            table td, table th,
+            .cell-wrap, .header-wrap,
+            .gradio-dataframe td, .gradio-dataframe th {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            }
+        """
     )

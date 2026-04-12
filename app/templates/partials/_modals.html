@@ -1,0 +1,87 @@
+<!-- Create Class Modal -->
+<dialog id="create-class-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold mb-4">Create New Class</h3>
+        <label for="new-class-name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Class Name</label>
+        <input type="text" id="new-class-name" placeholder="e.g., Art History 101"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
+            onkeydown="if(event.key==='Enter'){createClass();}">
+        <p id="create-class-error" class="text-sm text-red-600 mb-3 hidden"></p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('create-class-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="createClass()"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors">Create Class</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Delete Class Modal -->
+<dialog id="delete-class-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold text-red-600 mb-2">Delete Class?</h3>
+        <p class="text-sm text-gray-600 mb-4">This will permanently delete <strong id="delete-class-name-display"></strong> and all its files, flashcards, and chat history. This cannot be undone.</p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('delete-class-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="deleteClass()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">Yes, Delete Everything</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Delete File Modal -->
+<dialog id="delete-file-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold text-red-600 mb-2">Delete File?</h3>
+        <p class="text-sm text-gray-600 mb-4">Delete <strong id="delete-file-name-display"></strong>? This will also remove its embeddings and related flashcards.</p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('delete-file-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="deleteFile()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">Yes, Delete</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Clear All Files Modal -->
+<dialog id="clear-files-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold text-red-600 mb-2">Delete ALL Files?</h3>
+        <p class="text-sm text-gray-600 mb-4">This will delete all uploaded materials for this class. This cannot be undone!</p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('clear-files-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="clearAllFiles()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">Yes, Clear All</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Clear Chat Modal -->
+<dialog id="clear-chat-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold text-red-600 mb-2">Clear Chat?</h3>
+        <p class="text-sm text-gray-600 mb-4">Clear all chat history for this class? This cannot be undone.</p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('clear-chat-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="clearChat()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">Yes, Clear</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Delete Flashcard Set Modal -->
+<dialog id="delete-set-modal" class="rounded-lg shadow-xl p-0 backdrop:bg-black/50 w-full max-w-md" aria-modal="true">
+    <div class="p-6">
+        <h3 class="text-lg font-semibold text-red-600 mb-2">Delete Flashcard Set?</h3>
+        <p class="text-sm text-gray-600 mb-4">Delete set <strong id="delete-set-name-display"></strong> and all its flashcards? This cannot be undone.</p>
+        <div class="flex justify-end gap-3">
+            <button onclick="document.getElementById('delete-set-modal').close()"
+                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">Cancel</button>
+            <button onclick="deleteSet()"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">Yes, Delete Set</button>
+        </div>
+    </div>
+</dialog>
