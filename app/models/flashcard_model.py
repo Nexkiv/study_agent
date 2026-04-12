@@ -16,12 +16,14 @@ class Flashcard(db.Model):
 
     term = db.Column(db.String(500), nullable=False)
     definition = db.Column(db.Text, nullable=False)
+    set_id = db.Column(db.Integer, db.ForeignKey('flashcard_sets.id'), nullable=True)
     image_url = db.Column(db.String(500))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
     class_ = db.relationship('Class', back_populates='flashcards')
     input = db.relationship('Input', back_populates='flashcards')
+    flashcard_set = db.relationship('FlashcardSet', back_populates='flashcards')
 
     def __repr__(self):
         return f'<Flashcard {self.id}: {self.term[:30]}...>'

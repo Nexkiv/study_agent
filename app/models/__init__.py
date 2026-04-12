@@ -10,6 +10,7 @@ Database schema:
 """
 from app.models.class_model import Class
 from app.models.input_model import Input
+from app.models.flashcard_set_model import FlashcardSet
 from app.models.flashcard_model import Flashcard
 from app.models.quiz_model import Quiz
 from app.models.chat_model import ChatMessage
@@ -17,6 +18,7 @@ from app.models.chat_model import ChatMessage
 __all__ = [
     'Class',
     'Input',
+    'FlashcardSet',
     'Flashcard',
     'Quiz',
     'ChatMessage'

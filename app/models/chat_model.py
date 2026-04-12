@@ -27,8 +27,9 @@ class ChatMessage(db.Model):
         return f'<ChatMessage {self.id}: {self.role}>'
 
     def to_dict(self):
-        """Convert to dict for agent history."""
+        """Convert to dict for agent history and API responses."""
         return {
             'role': self.role,
-            'content': self.content
+            'content': self.content,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
         }

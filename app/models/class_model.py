@@ -19,6 +19,8 @@ class Class(db.Model):
                             cascade='all, delete-orphan')
     flashcards = db.relationship('Flashcard', back_populates='class_',
                                 cascade='all, delete-orphan')
+    flashcard_sets = db.relationship('FlashcardSet', back_populates='class_',
+                                    cascade='all, delete-orphan')
     quizzes = db.relationship('Quiz', back_populates='class_',
                              cascade='all, delete-orphan')
     chat_messages = db.relationship('ChatMessage', back_populates='class_',
