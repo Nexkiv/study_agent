@@ -41,8 +41,8 @@ DEFAULT_CHAT_MODEL = 'gpt-4o-mini'  # Phase 3: Using OpenAI for chat
 DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 
 # Search result configuration
-CHAT_DEFAULT_N_RESULTS = 5          # Chat needs targeted results
-FLASHCARD_DEFAULT_N_RESULTS = 15    # Single search with comprehensive query (was 20, then 10, now 15)
+CHAT_DEFAULT_N_RESULTS = 30         # Enough to cover all sections + subsections
+FLASHCARD_DEFAULT_N_RESULTS = 60    # Increased to cover all sections in structured study guides
 
 # OCR Configuration
 TESSERACT_CMD = os.getenv('TESSERACT_CMD')  # Optional: override Tesseract path
@@ -56,7 +56,6 @@ ENABLE_CLAUDE_VISION_OCR = os.getenv('ENABLE_CLAUDE_VISION_OCR', 'false').lower(
 def ensure_directories():
     """Create data directories if they don't exist."""
     UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
-    (UPLOAD_PATH / "exports").mkdir(exist_ok=True)
     CHROMA_PATH.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 

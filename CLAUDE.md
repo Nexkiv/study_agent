@@ -18,7 +18,7 @@ Key features:
 - SQLite database schema with all tables
 - ChromaDB initialization
 - File upload infrastructure with validation
-- Gradio MVP interface (3-panel layout)
+- Flask + Tailwind CSS + HTMX interface (3-tab layout)
 - Configuration management (.env, config.py)
 - All ORM models created and tested
 - Course files (run_agent.py, tools.py, usage.py) integrated
@@ -29,12 +29,12 @@ Key features:
 - Text chunking (800 tokens, 150 overlap)
 - Embedding generation (OpenAI text-embedding-3-small)
 - ChromaDB vector storage with metadata
-- Integrated into Gradio upload workflow
+- Integrated into Flask upload workflow
 
 **✅ Phase 3 - RAG Chat Agent (COMPLETE)**
 - ✅ Tool use implementation (search_class_materials + execute_python + search_web)
 - ✅ Agent loop with OpenAI GPT-4o-mini (responses API with tool calling)
-- ✅ Chat history persistence (in-session via Gradio state)
+- ✅ Chat history persistence (SQLite database)
 - ✅ Spelling correction with rapidfuzz (65% similarity threshold)
 - ✅ Web search integration via Tavily API (optional, for historical context)
 - ✅ Single-line chat input (Enter to send, standard chat UX)
@@ -49,11 +49,41 @@ Key features:
 - ✅ Export functionality (`app/pipelines/exporters.py`)
   - Quizlet TSV format (tab-separated)
   - Anki CSV format (proper escaping)
-- ✅ Gradio UI integration
-  - Generate flashcards with topic input
+- ✅ Flask UI integration
+  - Generate flashcards with topic input and count slider
   - Export to Quizlet/Anki formats
   - Database persistence (SQLite)
 - ⏸️ Artwork image fetching (deferred to Phase 4.5)
+
+**✅ Phase 5 - Flask Migration & UI Polish (COMPLETE)**
+- Flask app factory with Blueprints (API + page routes)
+- Tailwind CSS + HTMX frontend (SPA-like with partial rendering)
+- Custom accessible dropdowns with keyboard navigation (class selector, set selector)
+- Flashcard sets with auto-creation per generation
+- Per-card inline editing (edit/delete individual flashcards)
+- Custom migration system (`app/migrations/`)
+- Dark mode with localStorage persistence
+- Toast notifications and modal confirmations
+- Chat markdown rendering (marked.js + DOMPurify)
+- File management with cascade deletion (disk + SQLite + ChromaDB)
+
+**✅ Phase 6 - RAG System Overhaul (COMPLETE)**
+- Section-aware chunking (`app/pipelines/section_detector.py`)
+  - Detects section headers (title-case, ALL-CAPS, markdown)
+  - Strips parenthetical instructor notes before detection
+  - Compound section names for subsections (e.g., `"Early Northern Renaissance > Terms, People, and Places to Know"`)
+  - Prepends `[Section: ...]` prefix to chunk text for embedding disambiguation
+- Upgraded search tool with three modes:
+  - Semantic search (query), section filter (metadata), keyword filter (document text)
+  - `list_sections` tool for discovering available sections
+- Anti-hallucination system prompt (grounded in search results only)
+- Source attribution (grouped by source/section at end of every response)
+- Spelling correction hardened (common English word exclusion prevents "table" → "Marble")
+- ChatMessage.to_dict() fix (removed `created_at` that broke OpenAI API on 2nd+ messages)
+- Export serving from memory via BytesIO (no orphaned temp files)
+- Flashcard limits increased to 60 (config, agent defaults, UI slider)
+- Legacy `gradio_app.py` deleted
+- `reset_db.py` script for clean DB wipes
 
 ## Architecture Philosophy
 
@@ -72,12 +102,25 @@ The codebase is split into two explicit layers:
 
 This architectural split is intentional and should be preserved — it demonstrates when agents add value vs. when deterministic code is faster/cheaper.
 
+## Flask Frontend Architecture
+
+The frontend uses Flask + Tailwind CSS + HTMX with vanilla JavaScript (no framework):
+
+- **App Factory** (`app/__init__.py`): `create_app()` initializes SQLAlchemy, ChromaDB, runs migrations, registers blueprints
+- **Blueprints**: `main_bp` (page routes, no prefix) + `api_bp` (REST API, `/api` prefix)
+- **HTMX Partials**: Tab content loaded via `/partials/materials/<id>`, `/partials/chat/<id>`, `/partials/flashcards/<id>`
+- **Template Hierarchy**: `base.html` (shell) → `index.html` (SPA page) → `partials/` (tab content, file lists, flashcard tables)
+- **State Management**: `app.js` tracks `currentClassId`, `currentSetId`, `allFlashcards`, `flashcardPage` in module-level variables
+- **Custom Dropdowns**: Built from scratch with ARIA roles, keyboard navigation (arrow keys, Enter, Escape), click-outside-to-close
+- **Chat Rendering**: Assistant messages rendered as markdown (marked.js + DOMPurify), user messages as escaped plain text
+- **Dark Mode**: CSS class toggle on `<html>` element, persisted via localStorage
+
 ## Project Structure
 
 ```
 study_agent/
 ├── app/
-│   ├── __init__.py              # Package initialization ✅
+│   ├── __init__.py              # App factory (create_app) ✅
 │   ├── config.py                # API keys, DB paths, constants ✅
 │   ├── extensions.py            # SQLAlchemy + ChromaDB init ✅
 │   │
@@ -85,31 +128,53 @@ study_agent/
 │   │   ├── __init__.py
 │   │   ├── class_model.py       # Class container
 │   │   ├── input_model.py       # Uploaded materials
-│   │   ├── flashcard_model.py   # Generated flashcards
+│   │   ├── flashcard_model.py   # Generated flashcards (+ set_id FK)
+│   │   ├── flashcard_set_model.py # Flashcard grouping by generation ✅
 │   │   ├── quiz_model.py        # Generated quizzes
 │   │   └── chat_model.py        # Conversation history
+│   │
+│   ├── migrations/              # Custom migration runner ✅
+│   │   └── 001_flashcard_sets.py # Adds flashcard_sets table + set_id
 │   │
 │   ├── pipelines/               # ⚡ DETERMINISTIC LAYER
 │   │   ├── __init__.py          ✅
 │   │   ├── ingestion.py         # File routing + extraction ✅
-│   │   ├── chunking.py          # Text splitting + embedding ✅
-│   │   └── exporters.py         # Phase 4: CSV/TSV export
+│   │   ├── section_detector.py   # Document section detection ✅
+│   │   ├── chunking.py          # Section-aware text splitting + embedding ✅
+│   │   └── exporters.py         # Quizlet TSV / Anki CSV export ✅
 │   │
 │   ├── agents/                  # 🤖 AGENTIC LAYER
 │   │   ├── __init__.py          ✅
 │   │   ├── run_agent.py         # Agent execution loop (from course) ✅
 │   │   ├── tools.py             # ToolBox class (from course) ✅
-│   │   ├── chat_agent.py        # Phase 3: RAG + tool use
-│   │   └── study_agent.py       # Phase 4: Flashcard generation
+│   │   ├── chat_agent.py        # RAG chat + spelling correction ✅
+│   │   └── study_agent.py       # Flashcard generation ✅
 │   │
 │   ├── utils/                   # Utility functions ✅
 │   │   ├── __init__.py
-│   │   ├── usage.py             # Cost tracking (deferred to Phase 3)
+│   │   ├── usage.py             # Cost tracking (deferred)
 │   │   └── file_handler.py      # File upload handling ✅
 │   │
-│   ├── routes/                  # Flask Blueprints (post-MVP)
-│   ├── templates/               # Jinja2 templates (post-MVP)
-│   └── static/                  # CSS/JS assets (post-MVP)
+│   ├── routes/                  # Flask Blueprints ✅
+│   │   ├── __init__.py
+│   │   ├── main.py              # Page routes + HTMX partials
+│   │   └── api.py               # REST API (~22 endpoints)
+│   │
+│   ├── templates/               # Jinja2 templates ✅
+│   │   ├── base.html            # Layout shell (CDNs, dark mode)
+│   │   ├── index.html           # Main SPA page (tabs, dropdowns)
+│   │   └── partials/
+│   │       ├── materials_tab.html
+│   │       ├── chat_tab.html
+│   │       ├── flashcards_tab.html
+│   │       ├── _file_list.html
+│   │       ├── _flashcard_table.html
+│   │       ├── _chat_messages.html
+│   │       └── _modals.html     # 6 confirmation dialogs
+│   │
+│   └── static/                  # Frontend assets ✅
+│       ├── css/custom.css       # Animations, markdown styles
+│       └── js/app.js            # All client-side logic (~960 lines)
 │
 ├── data/
 │   ├── uploads/                 # User-uploaded files ✅
@@ -117,37 +182,34 @@ study_agent/
 │   ├── app.db                   # SQLite metadata ✅
 │   └── chroma/                  # ChromaDB vector store ✅
 │
+├── flask_app.py                 # Flask entry point ✅
 ├── init_db.py                   # Database initialization script ✅
-├── gradio_app.py                # Gradio MVP interface ✅
+├── reset_db.py                  # Wipe and reinitialize DB ✅
 ├── requirements.txt             # Python dependencies ✅
 ├── .env.example                 # Environment template ✅
 ├── .env                         # API keys (not committed) ✅
 └── .gitignore                   # Git ignore rules ✅
 ```
 
-**Legend:** ✅ = Implemented
-
 ## Tech Stack
 
 | Component | Technology | Version | Notes |
 |-----------|-----------|---------|-------|
-| Backend | Flask + SQLAlchemy | Flask 3.0.0, SQLAlchemy 3.1.1 | Python-native, modular with Blueprints |
+| Backend | Flask + SQLAlchemy | Flask 3.0.0, SQLAlchemy 3.1.1 | App factory + Blueprints |
+| Frontend | Tailwind CSS + HTMX | Tailwind CDN, HTMX 2.0.4 | SPA-like with partial rendering, no React |
+| Markdown | marked.js + DOMPurify | Latest CDN | Chat message rendering |
 | Metadata DB | SQLite | Built-in | Zero-config, single-file database |
 | Vector DB | ChromaDB | ≥0.5.0 | One collection per class, NumPy 2.0 compatible |
 | LLM APIs | OpenAI + Anthropic | openai 1.51.0, anthropic 0.40.0 | OpenAI for structured outputs, Claude for tool use |
 | Math OCR | Mathpix API | Post-MVP | Handles equations, diagrams, STEM content |
 | Audio | OpenAI Whisper | Post-MVP | Lecture recording transcription |
-| Embeddings | text-embedding-3-small | Phase 2 | Fast, cost-effective |
-| Frontend (MVP) | Gradio Blocks | ≥5.0.0 | Rapid prototyping, compatible with modern huggingface_hub |
-| Frontend (v2) | Tailwind CSS + HTMX | Post-MVP | Production UI, no React needed |
+| Embeddings | text-embedding-3-small | — | Fast, cost-effective (1536 dimensions) |
 | Python | Python 3.12 | 3.12+ | Virtual environment required |
 
 ### Compatibility Notes
 
 - **ChromaDB 0.5.0+**: Required for NumPy 2.0 compatibility. Earlier versions fail on `np.float_` removal.
-- **Gradio 5.x**: Chatbot message format changed to dict with `role`/`content` keys (not lists).
 - **PyYAML ≥6.0.1**: Version 6.0 has build issues with Python 3.12. Use 6.0.1+ for pre-built wheels.
-- **usage.py**: Deferred to Phase 3. OpenAI import path needs updating for current library version.
 
 ## Database Schema
 
@@ -171,10 +233,18 @@ CREATE TABLE inputs (
     created_at TIMESTAMP
 );
 
+CREATE TABLE flashcard_sets (
+    id INTEGER PRIMARY KEY,
+    class_id INTEGER NOT NULL REFERENCES classes(id),
+    name TEXT NOT NULL,              -- auto-named from topic (e.g., "Baroque Art")
+    created_at TIMESTAMP
+);
+
 CREATE TABLE flashcards (
     id INTEGER PRIMARY KEY,
     class_id INTEGER NOT NULL REFERENCES classes(id),
     input_id INTEGER REFERENCES inputs(id),
+    set_id INTEGER REFERENCES flashcard_sets(id),  -- groups cards by generation
     term TEXT NOT NULL,
     definition TEXT NOT NULL,
     image_url TEXT,                   -- public domain artwork image (optional)
@@ -200,218 +270,57 @@ CREATE TABLE chat_messages (
 );
 ```
 
+### Migrations
+
+Custom migration runner (not Alembic) in `app/migrations/`. Migrations run automatically on app startup via `create_app()`. Each migration file has `up()` and `down()` functions operating on raw SQLite connections.
+
 ### ChromaDB Structure
 
 - One collection per class: `class_{class_id}`
-- Chunk metadata includes: `source` (input name), `chunk_idx`
+- Chunk metadata includes: `source` (input name), `chunk_idx`, `section` (detected section title)
+- Section names may be compound for subsections: `"Parent > Subsection"`
+- Chunk text is prefixed with `[Section: ...]` so the embedding itself captures section context
 - Delete chunks by filtering: `collection.delete(where={"source": input_name})`
 
 ## Key Implementation Patterns
 
 ### 1. Deterministic Ingestion Pipeline
-
-File routing is based on extensions — no agent reasoning:
-
-```python
-def process_upload(file_path: str, class_id: int, input_name: str, input_type: str):
-    ext = Path(file_path).suffix.lower()
-
-    # Route to appropriate extractor
-    if ext in ('.txt', '.md'):
-        raw_text = extract_plain_text(file_path)
-    elif ext == '.pdf':
-        raw_text = process_pdf(file_path, input_type)
-    elif ext in ('.mp3', '.mp4', '.wav'):
-        raw_text = whisper_transcribe(file_path)
-    # ... etc
-
-    # Chunk and embed (deterministic)
-    chunks = chunk_text(raw_text, chunk_size=800, overlap=150)
-    embed_chunks(class_id, input_name, chunks)
-
-    # Store metadata
-    save_input(class_id, input_name, input_type, file_path, raw_text)
-```
+File routing based on extensions in `app/pipelines/ingestion.py`. Supports PDF (pypdf), DOCX (python-docx with heading style preservation), plain text, and PPTX. Section-aware chunking (800 chars, 150 overlap) in `app/pipelines/chunking.py` — detects document sections via `app/pipelines/section_detector.py`, prepends `[Section: ...]` prefix to each chunk, and stores section as ChromaDB metadata. Embedding via text-embedding-3-small.
 
 ### 2. RAG Chat Agent with Tool Use
+Agent in `app/agents/chat_agent.py` has four tools:
+- `search_class_materials(query, section, keyword)` — ChromaDB search with three modes: semantic (query), section filter (metadata), keyword filter (document text). Pass `""` for unused params.
+- `list_sections()` — Returns all section names in the collection. Agent calls this first for comprehensive coverage.
+- `execute_python` — Sandboxed code execution
+- `search_web` — Tavily API (optional)
 
-The chat agent has access to two tools:
-- `search_class_materials`: Semantic search via ChromaDB
-- `execute_python`: Code-as-tool for calculations/visualizations
-
-```python
-CHAT_TOOLS = [
-    {
-        "name": "search_class_materials",
-        "description": "Search uploaded class materials using semantic similarity",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "n_results": {"type": "integer", "default": 5}
-            }
-        }
-    },
-    {
-        "name": "execute_python",
-        "description": "Execute Python code for calculations or data analysis",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"}
-            }
-        }
-    }
-]
-```
-
-Agent loop continues until the model produces a final text response (no more tool calls).
+Uses OpenAI GPT-4o-mini via Responses API. Agent loop in `app/agents/run_agent.py` continues until the model produces a final text response. System prompt enforces anti-hallucination (only facts from search results) and source attribution (grouped "Sources:" section at end of every response).
 
 ### 3. Flashcard Generation with Structured Outputs
-
-Uses OpenAI Structured Outputs to guarantee valid JSON:
-
-```python
-response = client.responses.create(
-    model="gpt-5-mini",
-    input=[
-        {"role": "system", "content": "Generate flashcards from art history content..."},
-        {"role": "user", "content": f"Generate flashcards from:\n\n{context}"}
-    ],
-    text={
-        "format": {
-            "type": "json_schema",
-            "name": "flashcard_set",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "flashcards": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "term": {"type": "string"},
-                                "definition": {"type": "string"}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-)
-```
+Agent in `app/agents/study_agent.py` uses `list_sections` + per-section `search_class_materials` to find relevant content, then generates flashcards via OpenAI Structured Outputs (JSON schema guarantees valid `{term, definition}` pairs). Auto-creates a `FlashcardSet` per generation, named after the topic. Default limit: 60 flashcards.
 
 ### 4. Code Execution Sandbox
-
-For the `execute_python` tool, use restricted `exec()` with whitelisted modules:
-
-```python
-ALLOWED_MODULES = {"math", "numpy", "sympy", "statistics", "pandas", "matplotlib"}
-
-def execute_python_sandboxed(code: str) -> str:
-    stdout = io.StringIO()
-    local_vars = {}
-
-    for mod in ALLOWED_MODULES:
-        try:
-            local_vars[mod] = __import__(mod)
-        except ImportError:
-            pass
-
-    try:
-        with contextlib.redirect_stdout(stdout):
-            exec(code, {"__builtins__": {}}, local_vars)
-        return stdout.getvalue() or "Code executed successfully"
-    except Exception as e:
-        return f"Error: {type(e).__name__}: {e}"
-```
-
-For production, consider Docker isolation or Pyodide (Python in WebAssembly).
-
-### 5. Artwork Image Fetching (Deterministic)
-
-**Problem**: Art history flashcards without images are significantly less effective, since visual recognition is the core skill being tested.
-
-**Solution**: Most artworks in art history surveys are public domain. Free museum APIs provide high-quality images:
-
-```python
-import requests
-
-def fetch_artwork_image(title: str, artist: str) -> str | None:
-    """Deterministically fetch a public domain artwork image URL."""
-    # Try Wikimedia Commons first
-    search_url = "https://en.wikipedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "titles": f"{title}",
-        "prop": "pageimages",
-        "pithumbsize": 400,
-        "format": "json"
-    }
-    response = requests.get(search_url, params=params).json()
-    pages = response["query"]["pages"]
-    for page in pages.values():
-        if "thumbnail" in page:
-            return page["thumbnail"]["source"]
-
-    # Fallback: Met Museum API
-    search = requests.get(
-        f"https://collectionapi.metmuseum.org/public/collection/v1/search",
-        params={"q": f"{title} {artist}", "hasImages": True}
-    ).json()
-    if search["total"] > 0:
-        obj_id = search["objectIDs"][0]
-        obj = requests.get(
-            f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{obj_id}"
-        ).json()
-        return obj.get("primaryImageSmall")
-
-    return None  # Graceful fallback to text-only card
-```
-
-**Pipeline integration**:
-```
-LLM generates flashcard → fetch_artwork_image(term, artist) → store image_url in SQLite
-```
-
-Available APIs (all free, no authentication required for basic use):
-- **Wikimedia Commons**: Virtually all artworks
-- **Met Museum Open Access**: 400K+ works
-- **Art Institute of Chicago**: 100K+ works
-- **Europeana**: European cultural heritage (free API key)
-
-This is a **post-MVP feature** — simple deterministic function, no agent logic needed. Adds significant value for art history use case.
+Restricted `exec()` in `app/agents/chat_agent.py` with whitelisted modules (math, numpy, sympy, statistics, datetime). No builtins exposed. For production, consider Docker isolation.
 
 ## Domain Specialization: Art History
 
-The system is tuned for art history content:
+The system is tuned for art history content. See `app/agents/chat_agent.py` for the full system prompt.
 
-**Flashcard format**: Artist, Title, Date, Period, Medium, Style, Significance
+- **Flashcard format**: Artist, Title, Date, Period, Medium, Style, Significance
+- **Chunking strategy**: 800-token chunks with 150-token overlap, preserving artwork contexts
+- **Spelling correction**: Fuzzy matching against terms from course materials (rapidfuzz, 65% threshold)
 
-**System prompt for chat agent**:
-```
-You are an expert art history study assistant with deep knowledge of
-Western art from antiquity through contemporary periods.
-
-When answering questions:
-1. Always ground your response in the student's uploaded course materials.
-2. Use proper art historical terminology (chiaroscuro, sfumato, tenebrism, etc.)
-3. When discussing an artwork, reference: artist, title, date, medium if known.
-4. Cite which lecture/reading the information comes from.
-```
-
-**Chunking strategy**: 800-token chunks with 150-token overlap, preserving artwork contexts.
-
-## MVP Build Order
+## Build Order
 
 1. **Foundation**: SQLite schema, ChromaDB initialization, file uploads ✅
 2. **Ingestion Pipeline**: PDF extraction, chunking, embedding ✅
-3. **RAG Chat Agent**: Tool definitions, agent loop, Gradio `ChatInterface` ✅
+3. **RAG Chat Agent**: Tool definitions, agent loop, chat interface ✅
 4. **Flashcard Generation**: Structured outputs, CSV export ✅
-5. **UI Assembly**: Gradio `Blocks` layout with upload | chat | flashcards panels ✅
+5. **Flask Migration**: Gradio → Flask + Tailwind CSS + HTMX ✅
+6. **UI Polish**: Flashcard sets, inline editing, custom dropdowns, dark mode ✅
+7. **RAG Overhaul**: Section-aware chunking, upgraded search tools, anti-hallucination, source attribution ✅
 
-Post-MVP: Quiz generation, reflection loop, artwork image fetching, multi-class dashboard, Whisper transcription, Mathpix OCR, Flask migration.
+Post-MVP: Quiz generation, reflection loop, artwork image fetching, multi-class dashboard, Whisper transcription, Mathpix OCR.
 
 ## Development Commands
 
@@ -435,7 +344,12 @@ python init_db.py
 **Run the application:**
 ```bash
 source venv/bin/activate  # Activate virtual environment
-python gradio_app.py      # Launch Gradio UI at http://127.0.0.1:7860
+python flask_app.py       # Launch Flask UI at http://127.0.0.1:7860
+```
+
+**Reset database:**
+```bash
+python reset_db.py        # Wipe SQLite, ChromaDB, uploads and reinitialize
 ```
 
 **Testing (Phase 2+):**
@@ -449,6 +363,7 @@ The following environment variables should be set in `.env`:
 
 - `OPENAI_API_KEY`: For GPT models, Whisper, and embeddings
 - `ANTHROPIC_API_KEY`: For Claude tool use agent
+- `TAVILY_API_KEY`: For web search tool (optional, free tier at tavily.com)
 - `MATHPIX_APP_ID` and `MATHPIX_APP_KEY`: For STEM OCR (post-MVP)
 
 ## Cost Considerations
@@ -478,226 +393,33 @@ The key insight: Everything else (file routing, OCR, transcription, chunking, em
 
 - **Preserve the architectural split**: Keep `pipelines/` (deterministic) and `agents/` (agentic) separate. This is a core design principle, not just organization.
 - **Art history focus for MVP**: Don't try to support multiple domains initially. The domain specialization in prompts and flashcard formats is intentional.
-- **Gradio MVP**: Using Gradio 5.x for rapid prototyping. Flask + Tailwind CSS is the post-MVP production version.
-- **Code execution is post-MVP**: The `execute_python` tool is only needed when expanding to CS content that requires computation.
+- **Flask is the frontend**: `flask_app.py` is the entry point.
 - **Virtual environment required**: Always activate venv before running commands. Dependencies are isolated from system Python.
-- **Usage tracking deferred**: `usage.py` from course materials needs OpenAI import path update. Will be re-enabled in Phase 3.
 
-## Phase 2 Implementation Summary
+## Implementation Notes
 
-Phase 2 is now complete. Here's what was implemented:
+Non-obvious decisions and gotchas not derivable from reading the code:
 
-1. **Files created:**
-   - `app/pipelines/ingestion.py` - Deterministic file routing and text extraction ✅
-     - `extract_plain_text()` for .txt/.md files
-     - `extract_docx()` for DOCX files
-     - `extract_pdf()` for PDF files using pypdf
-     - `process_upload()` main entry point
+- **Spelling correction**: 65% similarity threshold (rapidfuzz `fuzz.ratio`). Common English words (200+ terms like "table", "format", "list") are excluded from correction to prevent "table" → "Marble" false matches. Only words not in `COMMON_ENGLISH_WORDS` set are candidates for correction.
 
-   - `app/pipelines/chunking.py` - Text splitting and embedding ✅
-     - `chunk_text()` using RecursiveCharacterTextSplitter
-     - `generate_embeddings()` with OpenAI text-embedding-3-small
-     - `delete_embeddings()` for cleanup when files are removed
+- **Section detection**: `section_detector.py` strips parenthetical content before title-case detection (e.g., "Spanish Renaissance (Also called mannerism...)" → detects "Spanish Renaissance"). Subsection headers that repeat (e.g., "Terms, People, and Places to Know") get compound names: `"Parent > Subsection"`.
 
-2. **Integration completed:**
-   - Updated `gradio_app.py` `upload_file()` to call full pipeline
-   - Populates `Input.raw_text` field with extracted text
-   - Uses `get_or_create_collection()` from extensions.py
-   - Stores chunks with metadata: `{"source": input_name, "chunk_idx": i}`
-   - Upload status now shows detailed ingestion progress
+- **ChatMessage.to_dict()**: Only returns `role` and `content`. Including `created_at` caused `Unknown parameter: 'input[0].created_at'` errors with the OpenAI Responses API on 2nd+ messages.
 
-3. **Configuration used:**
-   - `CHUNK_SIZE = 800` tokens
-   - `CHUNK_OVERLAP = 150` tokens
-   - `EMBEDDING_MODEL = 'text-embedding-3-small'`
-   - Semantic separators: `["\n\n", "\n", ". ", " "]`
+- **Structured Outputs JSON parsing**: OpenAI's `response.output[0].content` is a list, not a string. Must extract via `response.output[0].content[0].text` before JSON parsing.
 
-## Additional Features Implemented
+- **Flashcard sets**: Auto-created per generation, named after the topic. Migration `001_flashcard_sets.py` creates a "Previously generated" set per class to group pre-migration cards.
 
-### File Management (2026-03-20)
-**Purpose**: Enable users to manage uploaded files and clean up test data
+- **Web search**: Optional Tavily API integration. Works without API key (shows setup instructions). Add `TAVILY_API_KEY=tvly-xxx` to `.env`.
 
-**Features:**
-- **Individual File Deletion**: Select and delete specific uploaded files with confirmation
-- **Bulk Delete**: "Clear All Files" button to remove all files from a class (for testing)
-- **Data Cleanup**: Automatically removes files from disk, SQLite, and ChromaDB
-- **Cascade Deletion**: Related flashcards are removed when source file is deleted
-- **Chat History Preserved**: Chat messages remain intact as conversational context
+- **File deletion cascade**: Deleting a file removes data from 3 layers (disk, SQLite, ChromaDB). Chat history is intentionally preserved.
 
-**Implementation** (gradio_app.py):
-- `delete_file(input_id, class_name)` - Transaction-safe deletion across 3 storage layers
-- `clear_all_files(class_name)` - Bulk deletion with best-effort cleanup
-- `get_current_file_list(class_name)` - Helper for UI file list display
-- `get_file_choices(class_name)` - Helper for file selector dropdown
+- **Export files**: Served from memory via `io.BytesIO` — no temp files written to disk, no orphaned exports.
 
-**UI Components**:
-- File selector dropdown in upload panel
-- "Delete Selected" button with confirmation modal
-- "Clear All Files" button with warning confirmation
-- Real-time file list updates after operations
+- **Async in sync Flask**: Agent functions are async but Flask handlers are sync. Uses `asyncio.run()` as bridge.
 
-### Class Switching (2026-03-20)
-**Purpose**: Improve UX by allowing users to easily switch between existing classes
+### Future Enhancements
 
-**Features:**
-- **Dropdown Selector**: Replace text input with dropdown showing all existing classes
-- **Create New Class**: "➕ Create New Class..." option with conditional text input
-- **Auto-Update**: Dropdown refreshes when new classes are created
-- **Context Switching**: File list and all UI elements update when switching classes
-- **No Default Selection**: Forces explicit class selection for clarity
-
-**Implementation** (gradio_app.py):
-- `get_all_classes()` - Query all classes, return sorted list + create option
-- `handle_class_selection(selected_value)` - Show/hide new class input, load files
-- `create_new_class(new_class_name)` - Create class, update dropdown, switch context
-- Hidden `current_class_name` state component for tracking actual class name
-
-**UI Pattern**:
-- `class_selector` dropdown (populated on load, updated after uploads)
-- `new_class_input` textbox (hidden until "Create New Class" selected)
-- `create_class_btn` button (hidden until needed)
-- All event handlers updated to use hidden state instead of direct textbox
-
-**Benefits:**
-- **Discoverability**: Users see all available classes without guessing names
-- **Error Prevention**: Dropdown prevents typos that would create duplicate classes
-- **Faster Workflow**: One-click switching vs. typing entire class name
-- **Auto-Sync**: New classes appear immediately without page refresh
-
-### RAG Chat Enhancements (2026-03-20)
-**Purpose**: Improve chat UX and enable historical context lookup beyond course materials
-
-#### 1. Keyboard Shortcuts
-**Problem**: Gradio 5.x multi-line textboxes use Shift+Enter to submit (not intuitive for chat)
-**Solution**: Changed to single-line input (`lines=1`) so Enter submits messages immediately
-
-**Technical Details:**
-- Gradio keyboard behavior is controlled by `lines` parameter, not `submit_btn`
-- `lines=1`: Enter submits (standard chat UX like ChatGPT, Slack)
-- `lines>1`: Shift+Enter submits, Enter creates newlines (email-style)
-- File: gradio_app.py:534-540
-
-**Trade-off**: Users cannot type multi-paragraph questions, but this matches standard chat expectations and is appropriate for art history Q&A.
-
-#### 2. Spelling Correction
-**Purpose**: Automatically correct misspellings using terms from uploaded course materials
-
-**Implementation** (app/agents/chat_agent.py):
-- `correct_spelling(query, class_name)` - Fuzzy matching preprocessor
-- Extracts proper nouns (capitalized words) from ChromaDB documents using regex
-- Uses `rapidfuzz` library with `fuzz.ratio` scorer
-- Similarity threshold: **65%** (catches "Alderfini" → "Arnolfini" at 66.67%)
-- Preserves original punctuation and capitalization
-- Gracefully falls back to original query on error
-
-**Dependencies:**
-- `rapidfuzz>=3.0.0` added to requirements.txt
-
-**Example:**
-```
-User types: "Who is Alderfini?"
-Corrected to: "Who is Arnolfini?"
-Agent receives corrected query
-```
-
-**Why 65% threshold?**
-- Initially tried 80%, but "Alderfini" vs "Arnolfini" scores 66.67%
-- 65% catches common typos while avoiding false positives
-- Upper bound (<100%) prevents "correcting" exact matches
-
-#### 3. Web Search Tool
-**Purpose**: Enable historical context and connections not in uploaded materials
-
-**Implementation** (app/agents/chat_agent.py):
-- `search_web(query, max_results=3)` - Async Tavily API integration
-- Adds "art history" prefix to queries for better results
-- Prefers reliable sources: Wikipedia, Met Museum, art history sites
-- Returns formatted results with titles, URLs, and content snippets
-- Gracefully handles missing API key with setup instructions
-
-**Dependencies:**
-- `tavily-python>=0.3.0` added to requirements.txt
-- `TAVILY_API_KEY` added to config.py and .env.example
-
-**Agent Behavior:**
-- System prompt instructs: "For historical connections or context not in materials, use search_web"
-- Example use case: "How are the Portinari and Medici families related?"
-- Agent checks course materials first, then uses web search for broader context
-
-**Setup:**
-1. Sign up at https://tavily.com (free tier available)
-2. Add `TAVILY_API_KEY=tvly-xxx` to .env
-3. Restart application
-
-**Optional Feature**: Works without API key (shows helpful error message explaining setup)
-
-### Flashcard Generation (2026-03-24)
-**Purpose**: Generate study flashcards from course materials using AI
-
-**Features:**
-- **Intelligent Generation**: Agent uses RAG to find relevant content based on topic
-- **Structured Outputs**: Guaranteed JSON format with term/definition pairs
-- **Multiple Export Formats**: Quizlet TSV and Anki CSV
-- **Database Persistence**: Flashcards stored in SQLite for later retrieval
-
-**Implementation** (app/agents/study_agent.py, app/pipelines/exporters.py, gradio_app.py):
-- `generate_flashcards_for_topic()` - Main entry point with agentic workflow
-- `generate_flashcards_structured()` - Tool using OpenAI Structured Outputs
-- `export_to_quizlet()` - TSV formatter for Quizlet import
-- `export_to_anki()` - CSV formatter with proper escaping
-
-**Usage Flow**:
-- User enters topic (e.g., "Baroque period")
-- Agent searches class materials via RAG
-- Agent generates 15 flashcards using Structured Outputs
-- Flashcards saved to database and displayed in UI
-- User exports to Quizlet or Anki format
-
-**Bugfix Applied** (2026-03-24):
-- Fixed JSON parsing error in Structured Outputs response
-- Issue: `response.output[0].content` is a list, not a string
-- Solution: Extract text from `response.output[0].content[0].text`
-
-## Phase 3 Complete
-
-All RAG chat agent features have been implemented and tested:
-- ✅ `app/agents/chat_agent.py` - RAG agent with 3 tools (search, web, code execution)
-- ✅ `gradio_app.py` - Chat interface wired to agent with async handling
-- ✅ Tool use: `search_class_materials`, `search_web`, `execute_python`
-- ✅ Spelling correction preprocessor
-- ✅ Chat history persistence (in-session via Gradio state)
-- ✅ Agent loop using course `run_agent.py` pattern with OpenAI GPT-4o-mini
-
-### Future Enhancements for Phase 3
-
-**Response Length Limiting:**
-- **Issue**: Agent responses can sometimes be verbose or overly detailed
-- **Proposed Solution**: Add max_tokens parameter to agent config or system prompt instruction
-- **Implementation Options**:
-  1. Hard limit via OpenAI API `max_tokens` parameter (e.g., 500-800 tokens)
-  2. Soft limit via system prompt: "Keep responses concise (2-3 paragraphs max)"
-  3. Dynamic limit based on query complexity (simple questions = shorter responses)
-- **Trade-offs**:
-  - ✅ Faster responses, lower costs
-  - ✅ Better for mobile/quick scanning
-  - ❌ May truncate detailed explanations for complex art history topics
-  - ❌ Risk cutting off mid-sentence if hard limit too strict
-- **Recommended**: Start with system prompt instruction, add hard limit only if needed
-- **File to modify**: `app/agents/chat_agent.py` (ART_HISTORY_SYSTEM_PROMPT or create_rag_agent_config)
-
-**Example Implementation:**
-```python
-# In system prompt:
-ART_HISTORY_SYSTEM_PROMPT = """...
-Response guidelines:
-- Keep responses concise: 2-3 paragraphs maximum
-- Prioritize key facts over exhaustive detail
-- Use bullet points for lists of artworks or characteristics
-"""
-
-# Or in agent config:
-"kwargs": {
-    "temperature": 0.7,
-    "max_tokens": 600  # Limit response length
-}
-```
+- **Response length limiting**: Agent can be verbose. Options: system prompt instruction (soft) or `max_tokens` parameter (hard). Start with system prompt.
+- **Artwork image fetching**: Public domain images via Wikimedia/Met Museum APIs. Schema already has `image_url` column.
+- **Quiz generation**: `quizzes` table exists but no agent implementation yet.

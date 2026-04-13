@@ -911,37 +911,148 @@ That's it. Five features. One page. One class at a time.
 - Trade-off: faster/cheaper vs. detailed art history explanations
 - Recommended: Start with system prompt "Keep responses concise (2-3 paragraphs max)"
 
-**Phase 4 — Flashcard Generation + Export (Days 8–9)** 🚧 TODO
+**Phase 4 — Flashcard Generation + Export (Days 8–9)** ✅ COMPLETE
 
-- Structured Output call with JSON schema for `{term, definition}` pairs
-- Store flashcards in SQLite
-- CSV export function for Quizlet/Anki
-- Gradio `gr.Dataframe` display + download button
+- ✅ Structured Output call with JSON schema for `{term, definition}` pairs
+- ✅ Store flashcards in SQLite
+- ✅ CSV export function for Quizlet/Anki (`app/pipelines/exporters.py`)
+- ✅ UI display with topic input and count slider
+- ✅ Agentic RAG workflow: agent searches materials then generates structured flashcards
+- ✅ Intent parsing for scope guidance (terms vs. people vs. artworks)
+- ✅ Post-generation deduplication
+- **Deviation**: Used OpenAI Structured Outputs (Responses API) instead of Anthropic. Gradio `gr.Dataframe` replaced by Flask table with inline editing.
 
-**Phase 5 — Polish & Testing (Day 10)** 🚧 TODO
+**Phase 5 — Flask Migration & UI Polish** ✅ COMPLETE
 
-- Loading indicators during agent calls
-- Comprehensive error handling
-- Test with real art history PDFs from courses
-- Documentation updates
-
-**That's your MVP.** Ten days, one Gradio page, two agentic features (chat + flashcard generation), and a clear deterministic/agentic split to present in CS 301R. Everything builds on patterns you've already implemented in class.
+- ✅ Migrated from Gradio to Flask + Tailwind CSS + HTMX (Gradio's limitations caused 4 rounds of UI fixes before switching)
+- ✅ App factory pattern with Blueprints (`main_bp` + `api_bp`)
+- ✅ ~22 REST API endpoints in `app/routes/api.py`
+- ✅ HTMX partial rendering for dynamic tab content
+- ✅ Flashcard sets with auto-creation per generation
+- ✅ Per-card inline editing (edit/delete individual flashcards)
+- ✅ Custom accessible dropdowns with keyboard navigation (class selector, set selector)
+- ✅ Dark mode with localStorage persistence
+- ✅ Toast notifications and modal confirmations (6 `<dialog>` elements)
+- ✅ Chat markdown rendering (marked.js + DOMPurify)
+- ✅ File management with cascade deletion (disk + SQLite + ChromaDB)
+- ✅ Custom migration system (`app/migrations/`)
+- **Deviation**: Original Phase 5 was "Polish & Testing" for the Gradio MVP. Flask migration was originally post-MVP but was pulled forward when Gradio proved too limiting for production UX.
 
 ---
 
 ## Post-MVP Expansion Roadmap
 
-| Phase    | What to Add                                  | Effort   |
-| -------- | -------------------------------------------- | -------- |
-| **v0.2** | Quiz generation + interactive quiz UI        | 3–4 days |
-| **v0.3** | Streaming SSE for chat responses             | 1–2 days |
-| **v0.4** | Reflection loop on flashcard/quiz quality    | 2–3 days |
-| **v0.5** | Multi-class dashboard, class CRUD            | 2–3 days |
-| **v0.6** | Railway deployment + custom domain           | 1 day    |
-| **v0.7** | Whisper transcription for audio inputs       | 1–2 days |
-| **v0.8** | Mathpix OCR + code-as-tool for CS domain     | 3–4 days |
-| **v0.9** | Religion domain profile                      | 2–3 days |
-| **v1.0** | Polished README, demo video, GitHub showcase | 2–3 days |
+| Phase    | What to Add                                  | Effort   | Status |
+| -------- | -------------------------------------------- | -------- | ------ |
+| **v0.2** | Quiz generation + interactive quiz UI        | 3–4 days | TODO   |
+| **v0.3** | Streaming SSE for chat responses             | 1–2 days | TODO   |
+| **v0.4** | Reflection loop on flashcard/quiz quality    | 2–3 days | TODO   |
+| **v0.5** | Multi-class dashboard, class CRUD            | 2–3 days | ✅ DONE (class switching, CRUD, file management) |
+| **v0.6** | Railway deployment + custom domain           | 1 day    | TODO   |
+| **v0.7** | Whisper transcription for audio inputs       | 1–2 days | TODO   |
+| **v0.8** | Mathpix OCR + code-as-tool for CS domain     | 3–4 days | TODO (OCR pipeline exists but disabled) |
+| **v0.9** | Religion domain profile                      | 2–3 days | TODO   |
+| **v1.0** | Polished README, demo video, GitHub showcase | 2–3 days | TODO   |
+
+Additional completed items not in original roadmap:
+- ✅ Dark mode toggle (originally listed as post-MVP cosmetic)
+- ✅ Flask migration (originally post-MVP, pulled forward)
+- ✅ Flashcard sets with per-set management
+- ✅ Spelling correction via rapidfuzz
+- ✅ Web search tool via Tavily API
+- ✅ Per-card inline editing
+
+---
+
+## Deviations from Original Plan
+
+This section documents where the implementation diverged from the original design, added during the Flask migration (April 2026).
+
+### 1. Frontend: Gradio → Flask (Pulled Forward)
+
+**Plan**: Gradio Blocks for MVP, Flask + Tailwind post-MVP.
+**Actual**: Gradio was used through Phase 4 but its limitations (no custom styling, broken modal dialogs, poor chat UX, no dark mode control) caused 4 rounds of UI fixes. Migrated to Flask + Tailwind CSS + HTMX during Phase 5 instead of post-MVP.
+
+### 2. LLM Provider: Anthropic → OpenAI for Agent Loops
+
+**Plan**: Claude API (Anthropic) for tool use agent loops.
+**Actual**: OpenAI GPT-4o-mini with Responses API for both chat agent and flashcard generation. Anthropic SDK remains a dependency but is not used for the main agent loops. OpenAI was chosen for Structured Outputs support and the Responses API's tool calling ergonomics.
+
+### 3. Embeddings: Local → API
+
+**Plan**: `all-MiniLM-L6-v2` (local, free).
+**Actual**: `text-embedding-3-small` (OpenAI API, 1536 dimensions). Higher quality embeddings justified the small per-query cost for an art history RAG use case.
+
+### 4. Route Structure: Per-Resource → Consolidated
+
+**Plan**: Separate blueprint files per resource (`classes.py`, `inputs.py`, `chat.py`, `flashcards.py`, `quizzes.py`).
+**Actual**: Two files — `main.py` (page routes + HTMX partials) and `api.py` (~22 REST endpoints). Simpler for the current project size.
+
+### 5. Features Not in Original Plan
+
+| Feature | Why Added |
+|---------|-----------|
+| **Flashcard sets** | Organize flashcards by generation; auto-named from topic |
+| **Spelling correction** (rapidfuzz, 65% threshold) | Art history names are hard to spell ("Alderfini" → "Arnolfini") |
+| **Web search** (Tavily API) | Historical context beyond uploaded course materials |
+| **Custom migration system** | Lightweight alternative to Alembic for schema changes |
+| **Per-card inline editing** | Users needed to fix individual flashcard errors |
+| **Custom accessible dropdowns** | Native `<select>` couldn't be styled for dark mode |
+
+### 6. Features Still TODO from Original Plan
+
+| Feature | Original Phase | Notes |
+|---------|---------------|-------|
+| Quiz generation | v0.2 | `quizzes` table exists, no agent implementation |
+| Streaming SSE | v0.3 | Chat uses fetch + typing indicator instead |
+| Reflection loop | v0.4 | Flashcard quality relies on prompt engineering only |
+| Artwork image fetching | Phase 4.5 | Schema has `image_url` column, API code in INITIAL_PLAN.md |
+| Whisper transcription | v0.7 | Pipeline stub exists, not wired up |
+| Response length limiting | Phase 3.5 | Documented as future enhancement |
+| Deployment | v0.6 | Running locally only |
+
+---
+
+## Phase 6: RAG System Overhaul (Completed)
+
+The initial RAG implementation used flat, section-unaware chunking. Documents like structured study guides (with repeating sections and terms lists) lost their structure when chunked, causing the agent to return incomplete results and hallucinate terms from general knowledge.
+
+### Problems Identified
+
+1. **Flat chunking lost document structure** — 800-char chunks with no section awareness. A chunk containing "Philip the Bold, Flanders, Chartreuse de Champmol..." had no link to "Early Northern Renaissance."
+2. **Single-mode search tool** — Only semantic similarity search. No way to filter by section or keyword. The agent couldn't target specific document sections.
+3. **Spelling correction mangled normal English** — 65% fuzzy match threshold turned "table" → "Marble" (73% match) and "format" → "Reformation" (71% match).
+4. **Agent hallucinated terms** — System prompt told agent to "use proper art historical terminology (chiaroscuro, sfumato, tenebrism, impasto)" which encouraged injecting general knowledge.
+5. **ChatMessage.to_dict() included `created_at`** — Broke OpenAI Responses API on 2nd+ messages with "Unknown parameter" error.
+6. **Export files orphaned on disk** — Written to `data/uploads/exports/` and never cleaned up.
+
+### Solutions Implemented
+
+1. **Section-aware chunking** (`app/pipelines/section_detector.py`):
+   - Detects section headers (title-case, ALL-CAPS, markdown `#`)
+   - Strips parenthetical instructor notes before detection
+   - Compound names for subsections: `"Early Northern Renaissance > Terms, People, and Places to Know"`
+   - Chunk text prefixed with `[Section: ...]` for embedding disambiguation
+   - Section stored as ChromaDB metadata
+
+2. **Upgraded search tool** (`app/agents/chat_agent.py`):
+   - Three search modes: semantic (query), section filter (metadata), keyword filter (document text)
+   - New `list_sections` tool for discovering available sections
+   - Agent calls `list_sections` first, then searches per-section for comprehensive coverage
+
+3. **Spelling correction hardened**: Added 200+ common English words exclusion set. Only non-common words are candidates for fuzzy correction.
+
+4. **Anti-hallucination system prompt**: Removed hallucination-encouraging instructions. Added strong grounding constraint: "ONLY include information found in search results."
+
+5. **Source attribution**: Every response ends with grouped "Sources:" section listing which documents/sections were used.
+
+6. **Export from memory**: `io.BytesIO` instead of temp files. No orphaned exports.
+
+7. **ChatMessage.to_dict() fix**: Only returns `role` and `content`.
+
+8. **Flashcard limits**: Increased from 15 to 60 (config, agent, UI slider).
+
+9. **Cleanup**: Deleted legacy `gradio_app.py`. Added `reset_db.py` script.
 
 ---
 

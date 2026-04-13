@@ -71,8 +71,21 @@ def extract_docx(file_path: str) -> str:
         Extracted text with paragraphs separated by newlines
     """
     doc = Document(file_path)
-    paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-    return '\n\n'.join(paragraphs)
+    parts = []
+    for para in doc.paragraphs:
+        if not para.text.strip():
+            continue
+        # Preserve heading styles as markdown headers for section detection
+        if para.style and para.style.name and para.style.name.startswith('Heading'):
+            level_str = para.style.name.replace('Heading', '').strip()
+            try:
+                level = int(level_str)
+            except ValueError:
+                level = 1
+            parts.append(f"{'#' * level} {para.text}")
+        else:
+            parts.append(para.text)
+    return '\n\n'.join(parts)
 
 
 def extract_pdf(file_path: str) -> Tuple[str, int, bool]:

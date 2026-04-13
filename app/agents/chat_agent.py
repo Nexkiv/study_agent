@@ -16,7 +16,7 @@ import re
 from typing import Optional
 from rapidfuzz import process, fuzz
 
-from app.config import OPENAI_API_KEY, EMBEDDING_MODEL, TAVILY_API_KEY
+from app.config import OPENAI_API_KEY, EMBEDDING_MODEL, TAVILY_API_KEY, CHAT_DEFAULT_N_RESULTS
 from app.extensions import get_or_create_collection, db
 from app.models import Class
 
@@ -31,6 +31,45 @@ def get_async_openai_client() -> AsyncOpenAI:
     if _openai_async_client is None:
         _openai_async_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     return _openai_async_client
+
+
+# Common English words that should never be "corrected" to art terms.
+# Prevents "table" → "Marble", "format" → "Reformation", etc.
+COMMON_ENGLISH_WORDS = {
+    'about', 'above', 'across', 'after', 'again', 'against', 'along', 'also',
+    'always', 'among', 'another', 'answer', 'around', 'asked', 'away', 'back',
+    'based', 'because', 'been', 'before', 'began', 'being', 'below', 'best',
+    'better', 'between', 'body', 'book', 'both', 'bring', 'build', 'built',
+    'called', 'came', 'case', 'cause', 'change', 'city', 'close', 'come',
+    'compare', 'complete', 'consider', 'could', 'course', 'cover', 'create',
+    'current', 'define', 'describe', 'detail', 'develop', 'discuss', 'does',
+    'done', 'down', 'during', 'each', 'early', 'else', 'enough', 'even',
+    'every', 'example', 'explain', 'face', 'fact', 'family', 'feel', 'field',
+    'figure', 'file', 'find', 'first', 'following', 'form', 'format', 'found',
+    'from', 'full', 'gave', 'general', 'give', 'given', 'goes', 'going',
+    'good', 'great', 'group', 'grow', 'guide', 'half', 'hand', 'hard', 'have',
+    'head', 'help', 'here', 'high', 'hold', 'home', 'house', 'idea', 'image',
+    'important', 'include', 'into', 'just', 'keep', 'kind', 'know', 'known',
+    'land', 'large', 'last', 'late', 'later', 'lead', 'left', 'less', 'life',
+    'light', 'like', 'line', 'list', 'little', 'live', 'long', 'look', 'made',
+    'main', 'major', 'make', 'many', 'mark', 'material', 'matter', 'mean',
+    'might', 'mind', 'more', 'most', 'move', 'much', 'must', 'name', 'need',
+    'never', 'next', 'note', 'nothing', 'number', 'often', 'once', 'only',
+    'open', 'order', 'other', 'over', 'page', 'part', 'pass', 'past', 'period',
+    'person', 'place', 'plan', 'play', 'point', 'possible', 'power', 'present',
+    'probably', 'problem', 'provide', 'public', 'pull', 'push', 'quite', 'rather',
+    'read', 'real', 'right', 'room', 'round', 'rule', 'said', 'same', 'school',
+    'seem', 'sense', 'several', 'shall', 'show', 'side', 'since', 'small',
+    'some', 'something', 'soon', 'sort', 'space', 'stand', 'start', 'state',
+    'still', 'story', 'study', 'such', 'sure', 'system', 'table', 'take',
+    'talk', 'tell', 'term', 'terms', 'test', 'than', 'that', 'their', 'them',
+    'then', 'there', 'these', 'they', 'thing', 'think', 'those', 'though',
+    'thought', 'three', 'through', 'time', 'together', 'told', 'took', 'total',
+    'toward', 'true', 'turn', 'type', 'under', 'understand', 'unit', 'until',
+    'upon', 'used', 'using', 'very', 'view', 'want', 'water', 'well', 'were',
+    'while', 'whole', 'will', 'with', 'within', 'without', 'word', 'work',
+    'world', 'would', 'write', 'year', 'your',
+}
 
 
 def correct_spelling(query: str, class_name: str) -> str:
@@ -98,6 +137,10 @@ def correct_spelling(query: str, class_name: str) -> str:
             if not clean_word:
                 continue
 
+            # Skip common English words — only correct likely art term misspellings
+            if clean_word.lower() in COMMON_ENGLISH_WORDS:
+                continue
+
             # Find best match using fuzzy matching
             # Only correct if similarity is high (>= 80) but not exact (< 100)
             match_result = process.extractOne(
@@ -124,54 +167,94 @@ def correct_spelling(query: str, class_name: str) -> str:
 
 
 # Art history expert system prompt
-ART_HISTORY_SYSTEM_PROMPT = """You are an expert art history study assistant with deep knowledge of Western art from antiquity through contemporary periods.
+ART_HISTORY_SYSTEM_PROMPT = """You are an expert art history study assistant helping students review their uploaded course materials.
+
+**CRITICAL CONSTRAINT — NO HALLUCINATIONS:**
+- ONLY include information found in search results from the student's materials
+- Do NOT add terms, definitions, artworks, or concepts from your general knowledge
+- Do NOT embellish or supplement search results with external art history knowledge
+- If the search results don't contain something, do NOT include it — even if you know it's relevant
+- Every fact in your response must be traceable to a specific search result
 
 When answering questions:
-1. ALWAYS ground your response in the student's uploaded course materials
-2. Use the search_class_materials tool to find relevant information before answering
-3. Use proper art historical terminology (chiaroscuro, sfumato, tenebrism, impasto, etc.)
-4. When discussing artworks, reference: artist, title, date, medium, period if known
-5. Cite which lecture/reading the information comes from (use source metadata)
-6. If asked to calculate or analyze data, use the execute_python tool
-7. For historical connections or context not in materials, use the search_web tool
+1. ALWAYS use search_class_materials to find relevant information BEFORE answering
+2. When discussing artworks, reference: artist, title, date, medium, period — but ONLY if these details appear in the search results
+3. If asked to calculate or analyze data, use the execute_python tool
+4. For historical connections or context NOT in the materials, use search_web — and clearly label this as external
 
 Tool usage guidelines:
-- search_class_materials: Primary source - always check course materials first
-- search_web: Use for broader context, artist biographies, historical connections (e.g., family relationships, patronage networks)
+- search_class_materials: Primary source — ALWAYS search course materials first. Supports three modes:
+  * Semantic search: provide a query to find related content by meaning
+  * Section filter: provide a section name to get content from a specific section
+  * Keyword filter: provide a keyword to find chunks containing that exact term
+  * Combine modes for targeted searches (e.g., query + section filter)
+  * Pass "" for any parameter you don't need
+- list_sections: Call this to see all available sections in the materials. Use it when you need comprehensive coverage.
+- search_web: ONLY for context not found in materials. Always label web results separately.
 - execute_python: For date math, timeline visualizations, statistical analysis
 
-Examples:
-- "How are the Portinari and Medici families related?" → search_class_materials first, then search_web for historical context
-- "How many years between X and Y?" → execute_python
+Search strategy for comprehensive questions (e.g., "all terms", "list everything", "who do I need to know"):
+1. Call list_sections to see all available sections
+2. Search each relevant section individually using the section filter
+3. Synthesize results from ALL searches before answering
+This ensures complete coverage — do NOT rely on a single broad search for comprehensive listings.
 
-CRITICAL: Do NOT make up information. If the uploaded materials don't contain the answer, use search_web or say so clearly.
+Source attribution (REQUIRED):
+- At the END of every response, include a "Sources:" section
+- Group cited facts by their source document and section
+- Format each line as: "- {Source Name} > {Section}: {key terms or facts cited from that source}"
+- If information came from search_web, list separately as: "- Web Search: {what was looked up}"
+- If you could not find information in materials or web search, say so clearly
+
+Example source attribution:
+Sources:
+- Study Guide > Early Northern Renaissance: Diptych, Triptych, Grisaille, Disguised symbolism
+- Study Guide > Early Southern Renaissance: Linear perspective, Contrapposto, Fresco
+- Web Search: Medici family patronage history
 """
 
 
-def create_search_tool(class_name: str, default_n_results: int = 5):
+def _format_results(results: dict) -> str:
+    """Format ChromaDB query results with source attribution."""
+    if not results['documents'] or not results['documents'][0]:
+        return ""
+
+    formatted = []
+    for doc, metadata in zip(results['documents'][0], results['metadatas'][0]):
+        source = metadata.get('source', 'Unknown')
+        section = metadata.get('section', '')
+        if section:
+            source_label = f"[Source: {source} | Section: {section}]"
+        else:
+            source_label = f"[Source: {source}]"
+        formatted.append(f"{source_label}\n{doc}\n")
+
+    return "\n---\n".join(formatted)
+
+
+def create_search_tool(class_name: str, default_n_results: int = CHAT_DEFAULT_N_RESULTS):
     """
     Factory function for search tool with class context.
 
     Args:
         class_name: Name of the class to search
-        default_n_results: Default number of results (5 for chat, 20 for flashcards)
+        default_n_results: Default number of results (from config, overridable for flashcards)
 
     Returns a tool function bound to specific class.
     """
-    async def search_class_materials(query: str, n_results: int = None) -> str:
+    async def search_class_materials(query: str, section: str, keyword: str) -> str:
         """
-        Search uploaded class materials using semantic similarity.
+        Search uploaded class materials. Supports semantic search, section filtering, and keyword matching.
 
         Args:
-            query: Search query (natural language)
-            n_results: Number of results to return (uses default if not specified)
+            query: Search query (natural language). Use "" to skip semantic search and use only section/keyword filters.
+            section: Filter results to a specific section name (e.g., "Early Northern Renaissance"). Use "" for no filter. Supports partial matching.
+            keyword: Filter results to chunks containing this keyword (case-insensitive substring match). Use "" for no filter.
 
         Returns:
-            Formatted search results with source attribution
+            Formatted search results with source and section attribution
         """
-        # Use default if not specified
-        if n_results is None:
-            n_results = default_n_results
+        n_results = default_n_results
         try:
             # Get class from database
             class_obj = Class.query.filter_by(name=class_name).first()
@@ -185,40 +268,116 @@ def create_search_tool(class_name: str, default_n_results: int = 5):
             if collection.count() == 0:
                 return "No materials uploaded yet. Please upload lecture notes or readings first."
 
-            # Generate query embedding (must use same model as ingestion)
-            client = get_async_openai_client()
-            embedding_response = await client.embeddings.create(
-                input=[query],
-                model=EMBEDDING_MODEL  # 'text-embedding-3-small'
-            )
-            query_embedding = embedding_response.data[0].embedding
+            # Resolve section filter — find matching section names via substring
+            section_where = None
+            if section:
+                all_meta = collection.get(include=["metadatas"])
+                all_sections = {m.get('section', '') for m in all_meta['metadatas']} - {''}
+                section_lower = section.lower()
+                matching = [s for s in all_sections if section_lower in s.lower()]
+                if not matching:
+                    return f"No sections matching '{section}' found. Use list_sections to see available sections."
+                if len(matching) == 1:
+                    section_where = {"section": matching[0]}
+                else:
+                    section_where = {"section": {"$in": matching}}
 
-            # Query ChromaDB with embedding
-            results = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=min(n_results, collection.count())
-            )
+            # Build query kwargs
+            query_kwargs = {
+                "n_results": min(n_results, collection.count())
+            }
 
-            # Format results with source attribution
-            if not results['documents'] or not results['documents'][0]:
-                return f"No relevant information found for: {query}"
+            if section_where:
+                query_kwargs["where"] = section_where
 
-            formatted_results = []
-            for i, (doc, metadata) in enumerate(zip(
-                results['documents'][0],
-                results['metadatas'][0]
-            )):
-                source = metadata.get('source', 'Unknown')
-                formatted_results.append(
-                    f"[Source: {source}]\n{doc}\n"
+            # Keyword filter (works on document text)
+            if keyword:
+                query_kwargs["where_document"] = {"$contains": keyword}
+
+            # Semantic search with embedding
+            if query:
+                client = get_async_openai_client()
+                embedding_response = await client.embeddings.create(
+                    input=[query],
+                    model=EMBEDDING_MODEL
                 )
+                query_kwargs["query_embeddings"] = [embedding_response.data[0].embedding]
+            else:
+                # No query — use get() for section/keyword-only search
+                get_kwargs = {}
+                if section_where:
+                    get_kwargs["where"] = section_where
 
-            return "\n---\n".join(formatted_results)
+                all_results = collection.get(**get_kwargs, include=["documents", "metadatas"])
+                if not all_results['documents']:
+                    return f"No results found for section='{section}', keyword='{keyword}'"
+
+                # Manual keyword filter if needed
+                if keyword:
+                    keyword_lower = keyword.lower()
+                    filtered_docs = []
+                    filtered_metas = []
+                    for doc, meta in zip(all_results['documents'], all_results['metadatas']):
+                        if keyword_lower in doc.lower():
+                            filtered_docs.append(doc)
+                            filtered_metas.append(meta)
+                    all_results = {'documents': [filtered_docs], 'metadatas': [filtered_metas]}
+                else:
+                    all_results = {
+                        'documents': [all_results['documents']],
+                        'metadatas': [all_results['metadatas']]
+                    }
+
+                result_text = _format_results(all_results)
+                return result_text if result_text else f"No results found for section='{section}', keyword='{keyword}'"
+
+            results = collection.query(**query_kwargs)
+            result_text = _format_results(results)
+            return result_text if result_text else f"No relevant information found for: {query}"
 
         except Exception as e:
             return f"Search error: {str(e)}"
 
     return search_class_materials
+
+
+def create_list_sections_tool(class_name: str):
+    """
+    Factory function for list_sections tool with class context.
+    """
+    async def list_sections() -> str:
+        """
+        List all document sections available in the class materials.
+        Returns section names that can be used with search_class_materials' section parameter.
+        Call this first when you need comprehensive coverage across all sections.
+        """
+        try:
+            class_obj = Class.query.filter_by(name=class_name).first()
+            if not class_obj:
+                return f"Error: Class '{class_name}' not found"
+
+            collection = get_or_create_collection(class_obj.id)
+            if collection.count() == 0:
+                return "No materials uploaded yet."
+
+            # Get all metadata to extract unique sections
+            all_data = collection.get(include=["metadatas"])
+            sections = set()
+            for meta in all_data['metadatas']:
+                section = meta.get('section', '')
+                if section:
+                    sections.add(section)
+
+            if not sections:
+                return "No sections detected in uploaded materials."
+
+            sorted_sections = sorted(sections)
+            return "Available sections:\n" + "\n".join(f"- {s}" for s in sorted_sections)
+
+        except Exception as e:
+            return f"Error listing sections: {str(e)}"
+
+    return list_sections
 
 
 # Allowed modules for sandbox
@@ -342,7 +501,7 @@ def create_rag_agent_config(class_name: str) -> dict:
         "description": "Art history study assistant with RAG, web search, and code execution",
         "model": "gpt-4o-mini",  # OpenAI model
         "prompt": ART_HISTORY_SYSTEM_PROMPT,
-        "tools": ["search_class_materials", "search_web", "execute_python"],
+        "tools": ["search_class_materials", "list_sections", "search_web", "execute_python"],
         "kwargs": {
             "temperature": 0.7  # Balanced creativity/consistency
         }

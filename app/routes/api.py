@@ -1,10 +1,10 @@
 """
 REST API routes for StudyAgent.
 
-All business logic ported from gradio_app.py, with Gradio dependencies removed.
 Returns JSON for HTMX/JS consumption.
 """
 import asyncio
+import io
 import shutil
 from pathlib import Path
 
@@ -20,6 +20,7 @@ from app.agents.chat_agent import (
     get_async_openai_client,
     create_rag_agent_config,
     create_search_tool,
+    create_list_sections_tool,
     execute_python,
     correct_spelling,
     search_web,
@@ -387,7 +388,9 @@ def chat(class_id):
         # Initialize tools
         toolbox = ToolBox()
         search_tool = create_search_tool(class_name)
+        list_sections_tool = create_list_sections_tool(class_name)
         toolbox.tool(search_tool)
+        toolbox.tool(list_sections_tool)
         toolbox.tool(search_web)
         toolbox.tool(execute_python)
 
@@ -623,13 +626,10 @@ def export_flashcards(class_id):
         filename = f"{class_obj.name.replace(' ', '_')}_flashcards_quizlet.tsv"
         mimetype = 'text/tab-separated-values'
 
-    export_path = UPLOAD_PATH / "exports"
-    export_path.mkdir(exist_ok=True)
-    file_path = export_path / filename
-    file_path.write_text(content, encoding='utf-8')
-
+    # Serve directly from memory — no temp files to orphan
+    buffer = io.BytesIO(content.encode('utf-8'))
     return send_file(
-        str(file_path),
+        buffer,
         as_attachment=True,
         download_name=filename,
         mimetype=mimetype,

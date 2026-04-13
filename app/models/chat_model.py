@@ -27,9 +27,12 @@ class ChatMessage(db.Model):
         return f'<ChatMessage {self.id}: {self.role}>'
 
     def to_dict(self):
-        """Convert to dict for agent history and API responses."""
+        """Convert to dict for OpenAI API conversation history.
+
+        Only includes role and content — extra fields like created_at
+        cause 'Unknown parameter' errors with the OpenAI Responses API.
+        """
         return {
             'role': self.role,
             'content': self.content,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
         }

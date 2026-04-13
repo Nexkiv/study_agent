@@ -10,7 +10,7 @@ import json
 import logging
 from typing import List, Dict, Tuple
 
-from app.agents.chat_agent import get_async_openai_client, create_search_tool
+from app.agents.chat_agent import get_async_openai_client, create_search_tool, create_list_sections_tool
 from app.agents.run_agent import run_agent
 from app.agents.tools import ToolBox
 from app.config import DEFAULT_CHAT_MODEL, FLASHCARD_DEFAULT_N_RESULTS
@@ -23,10 +23,10 @@ ART_HISTORY_FLASHCARD_PROMPT = """You are an expert art history flashcard genera
 Your goal: Create high-quality study flashcards from the student's uploaded course materials.
 
 Process:
-1. **Search comprehensively**: Use search_class_materials with a comprehensive query that combines
-   the user's intent (terms/people/artworks) and topic to find all relevant content
-2. Extract key information from search results: artworks, artists, movements, terms, dates
-3. Generate flashcards using generate_flashcards_structured tool
+1. Call list_sections to see all available sections in the materials
+2. Search each relevant section using search_class_materials with the section filter
+3. Extract key information from ALL search results: artworks, artists, movements, terms, dates
+4. Generate flashcards using generate_flashcards_structured tool with ALL gathered content
 
 **CRITICAL CONSTRAINTS - Read Carefully**:
 1. **Content Source - NO HALLUCINATIONS**:
@@ -121,7 +121,7 @@ def create_study_agent_config(class_name: str) -> dict:
         "description": f"Art history flashcard generator for {class_name}",
         "model": DEFAULT_CHAT_MODEL,  # gpt-4o-mini supports both tool use and structured outputs
         "prompt": ART_HISTORY_FLASHCARD_PROMPT,
-        "tools": ["search_class_materials", "generate_flashcards_structured"],
+        "tools": ["search_class_materials", "list_sections", "generate_flashcards_structured"],
         "kwargs": {
             "temperature": 0.5  # Lower temperature for more consistent flashcard quality
         }
@@ -131,7 +131,7 @@ def create_study_agent_config(class_name: str) -> dict:
 async def generate_flashcards_for_topic(
     class_name: str,
     topic: str,
-    count: int = 15
+    count: int = 60
 ) -> Tuple[List[Dict[str, str]], str]:
     """
     Main entry point for flashcard generation.
@@ -163,13 +163,14 @@ async def generate_flashcards_for_topic(
     # Store flashcards in closure variable that tool can access
     generated_flashcards = []
 
-    # Register search_class_materials tool (reuse from chat_agent)
     search_tool = create_search_tool(class_name, default_n_results=FLASHCARD_DEFAULT_N_RESULTS)
+    list_sections_tool = create_list_sections_tool(class_name)
     toolbox.tool(search_tool)
+    toolbox.tool(list_sections_tool)
 
     # Register generate_flashcards_structured tool
     @toolbox.tool
-    async def generate_flashcards_structured(context: str, topic: str, count: int = 15) -> str:
+    async def generate_flashcards_structured(context: str, topic: str, count: int = 60) -> str:
         """
         Generate flashcards using OpenAI Structured Outputs.
 
@@ -269,10 +270,10 @@ async def generate_flashcards_for_topic(
     # Add topic to query
     query_parts.append(topic)
 
-    # Single search instruction
     comprehensive_query = " ".join(query_parts)
     search_instructions = [
-        f"1. Search for '{comprehensive_query}' - comprehensive search for all relevant content"
+        f"1. Call list_sections to see all available sections",
+        f"2. Search each relevant section using search_class_materials with section filter and query '{comprehensive_query}'",
     ]
 
     # Build scope guidance

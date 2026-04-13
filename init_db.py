@@ -90,7 +90,7 @@ def init_database():
     print("Database initialization complete!")
     print("="*50)
     print("\nNext steps:")
-    print("1. Run: python gradio_app.py")
+    print("1. Run: python flask_app.py")
     print("2. Upload a PDF to test ingestion pipeline")
     print("3. Chat with your materials!")
 
