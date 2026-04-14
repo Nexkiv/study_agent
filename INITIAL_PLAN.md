@@ -321,6 +321,8 @@ This is a true agent — the LLM decides at runtime whether to search materials,
 
 ### Agentic Pattern 2: Flashcard Generation (Post-MVP: Planning + Reflection)
 
+> **Implementation Status (Phase 4+):** Flashcard generation evolved beyond the MVP design below. The current implementation uses a full RAG agent with tool use (`list_sections` + `search_class_materials` + `generate_flashcards_structured`) rather than a single structured LLM call. Key additions: content-driven count (generates one flashcard per matching item, no user-specified count), post-processing category filter (LLM classifies and removes off-category items with fail-open logic), and cancellable generation via `threading.Event`. See `app/agents/study_agent.py`.
+
 For the **MVP**, flashcard generation uses a simpler approach — retrieve relevant chunks via ChromaDB, then make a **single structured LLM call** to produce term/definition pairs. This is technically a workflow (predefined code path), not a full agent, and that's the right call for an MVP.[^2]
 
 This uses **OpenAI Structured Outputs** to guarantee valid JSON matching the flashcard schema — no parsing or retry logic needed:[^28][^29]

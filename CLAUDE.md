@@ -45,12 +45,16 @@ Key features:
   - RAG-based agent with tool use (search_class_materials + generate_flashcards_structured)
   - OpenAI Structured Outputs with Responses API
   - System prompt specialized for art history flashcards
+  - Content-driven count: generates one flashcard per matching item (no user-specified count)
+  - Post-processing category filter: LLM classifies and removes off-category items (fail-open logic)
+  - Cancellable generation: server-side `threading.Event` checked in agent loop + client-side AbortController
   - Bugfix: Correct JSON parsing from response.output[0].content[0].text
 - ✅ Export functionality (`app/pipelines/exporters.py`)
   - Quizlet TSV format (tab-separated)
   - Anki CSV format (proper escaping)
 - ✅ Flask UI integration
-  - Generate flashcards with topic input and count slider
+  - Generate flashcards with topic input (count determined by content)
+  - Cancel button appears during generation, swaps with Generate button
   - Export to Quizlet/Anki formats
   - Database persistence (SQLite)
 - ⏸️ Artwork image fetching (deferred to Phase 4.5)
@@ -81,7 +85,7 @@ Key features:
 - Spelling correction hardened (common English word exclusion prevents "table" → "Marble")
 - ChatMessage.to_dict() fix (removed `created_at` that broke OpenAI API on 2nd+ messages)
 - Export serving from memory via BytesIO (no orphaned temp files)
-- Flashcard limits increased to 60 (config, agent defaults, UI slider)
+- Flashcard generation driven by content (count slider removed)
 - Legacy `gradio_app.py` deleted
 - `reset_db.py` script for clean DB wipes
 
@@ -110,7 +114,7 @@ The frontend uses Flask + Tailwind CSS + HTMX with vanilla JavaScript (no framew
 - **Blueprints**: `main_bp` (page routes, no prefix) + `api_bp` (REST API, `/api` prefix)
 - **HTMX Partials**: Tab content loaded via `/partials/materials/<id>`, `/partials/chat/<id>`, `/partials/flashcards/<id>`
 - **Template Hierarchy**: `base.html` (shell) → `index.html` (SPA page) → `partials/` (tab content, file lists, flashcard tables)
-- **State Management**: `app.js` tracks `currentClassId`, `currentSetId`, `allFlashcards`, `flashcardPage` in module-level variables
+- **State Management**: `app.js` tracks `currentClassId`, `currentSetId`, `currentSetName`, `allFlashcards`, `flashcardPage`, `generateController` in module-level variables
 - **Custom Dropdowns**: Built from scratch with ARIA roles, keyboard navigation (arrow keys, Enter, Escape), click-outside-to-close
 - **Chat Rendering**: Assistant messages rendered as markdown (marked.js + DOMPurify), user messages as escaped plain text
 - **Dark Mode**: CSS class toggle on `<html>` element, persisted via localStorage
@@ -297,7 +301,7 @@ Agent in `app/agents/chat_agent.py` has four tools:
 Uses OpenAI GPT-4o-mini via Responses API. Agent loop in `app/agents/run_agent.py` continues until the model produces a final text response. System prompt enforces anti-hallucination (only facts from search results) and source attribution (grouped "Sources:" section at end of every response).
 
 ### 3. Flashcard Generation with Structured Outputs
-Agent in `app/agents/study_agent.py` uses `list_sections` + per-section `search_class_materials` to find relevant content, then generates flashcards via OpenAI Structured Outputs (JSON schema guarantees valid `{term, definition}` pairs). Auto-creates a `FlashcardSet` per generation, named after the topic. Default limit: 60 flashcards.
+Agent in `app/agents/study_agent.py` uses `list_sections` + per-section `search_class_materials` to find relevant content, then generates flashcards via OpenAI Structured Outputs (JSON schema guarantees valid `{term, definition}` pairs). Auto-creates a `FlashcardSet` per generation, named after the topic. Flashcard count is content-driven — generates one card per matching item found in the materials (no count slider). When users request specific categories (e.g., "people and artists"), a post-processing LLM call classifies each card and removes off-category items using fail-open logic. Generation is cancellable via a `threading.Event` flag checked in the agent loop.
 
 ### 4. Code Execution Sandbox
 Restricted `exec()` in `app/agents/chat_agent.py` with whitelisted modules (math, numpy, sympy, statistics, datetime). No builtins exposed. For production, consider Docker isolation.
@@ -417,6 +421,14 @@ Non-obvious decisions and gotchas not derivable from reading the code:
 - **Export files**: Served from memory via `io.BytesIO` — no temp files written to disk, no orphaned exports.
 
 - **Async in sync Flask**: Agent functions are async but Flask handlers are sync. Uses `asyncio.run()` as bridge.
+
+- **Content-driven flashcard count**: The count slider was removed because users shouldn't have to guess how many items exist in their materials. The agent now generates one flashcard per matching item found in search results — the same exhaustive behavior as the chat agent when asked "What terms do I need to know?".
+
+- **Category filtering (post-processing)**: When users request specific categories (e.g., "people and artists"), a second structured output call classifies each flashcard term and removes non-matching items. Uses **fail-open logic**: only cards explicitly marked `matches=false` are removed; cards the classifier skips are kept. This is more reliable than prompt-engineering the agent to self-filter, because the agent's exhaustiveness instructions ("generate every item") conflict with category restrictions.
+
+- **Flashcard generation cancellation**: Uses `threading.Event` in `run_agent.py` (not `asyncio.Event`, because Flask runs sync in a separate thread from the asyncio event loop). The flag is checked at the top of each agent loop iteration. Client-side uses `AbortController` on the fetch + a `POST /api/flashcards/cancel` endpoint. The generate/cancel buttons swap visibility during generation.
+
+- **Delete flashcard preserves set selection**: `deleteFlashcard()` saves `currentSetId` before calling `loadFlashcardSets()` (which resets to "All sets"), then re-selects the saved set after the reload completes.
 
 ### Future Enhancements
 

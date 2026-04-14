@@ -1,12 +1,31 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 from contextvars import ContextVar
 from typing import TypedDict
 
 current_agent = ContextVar('current_agent')
 logger = logging.getLogger(__name__)
+
+# Thread-safe cancellation flag (Flask runs in a separate thread from asyncio)
+_cancel_flag = threading.Event()
+
+
+class AgentCancelled(Exception):
+    """Raised when agent execution is cancelled by the user."""
+    pass
+
+
+def cancel_agent():
+    """Signal the agent loop to stop at the next iteration."""
+    _cancel_flag.set()
+
+
+def reset_cancel():
+    """Clear the cancellation flag before starting a new run."""
+    _cancel_flag.clear()
 
 
 class Agent(TypedDict):
@@ -43,6 +62,10 @@ async def run_agent(
         history.append({'role': 'user', 'content': user_message})
 
     while True:
+        if _cancel_flag.is_set():
+            logger.info("Agent cancelled by user")
+            raise AgentCancelled("Generation cancelled by user")
+
         history_for_response = history
         if prompt := agent.get('prompt'):
             history_for_response = history_for_response + [{'role': 'system', 'content': prompt}]

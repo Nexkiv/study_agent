@@ -2,34 +2,24 @@
 <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <h2 class="text-lg font-semibold mb-4">Generate Flashcards</h2>
 
-    <div class="flex gap-4 mb-4">
-        <div class="flex-1">
-            <div class="flex items-center gap-1 mb-1">
-                <label for="flashcard-topic" class="text-sm font-medium text-gray-700 dark:text-gray-300">Focus area (optional)</label>
-                <span class="text-gray-400 cursor-help text-xs" title="Narrow flashcard generation to a specific topic. Results depend on your uploaded materials.">?</span>
-            </div>
-            <input type="text" id="flashcard-topic" placeholder="e.g., Baroque period"
-                class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Leave blank to generate from all course materials.</p>
+    <div class="mb-4">
+        <div class="flex items-center gap-1 mb-1">
+            <label for="flashcard-topic" class="text-sm font-medium text-gray-700 dark:text-gray-300">Focus area (optional)</label>
+            <span class="text-gray-400 cursor-help text-xs" title="Narrow flashcard generation to a specific topic. Results depend on your uploaded materials.">?</span>
         </div>
-        <div class="w-52">
-            <label for="flashcard-count" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Count: <span id="flashcard-count-display">15</span>
-            </label>
-            <div class="flex items-center gap-2 mt-1">
-                <span class="text-xs text-gray-400">5</span>
-                <input type="range" id="flashcard-count" min="5" max="60" value="15" step="5"
-                    oninput="document.getElementById('flashcard-count-display').textContent=this.value"
-                    class="flex-1">
-                <span class="text-xs text-gray-400">60</span>
-            </div>
-        </div>
+        <input type="text" id="flashcard-topic" placeholder="e.g., Baroque period, terms, artworks"
+            class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+        <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Leave blank to generate from all course materials. Flashcards are generated for every matching item found.</p>
     </div>
 
     <div class="flex items-center gap-4">
         <button onclick="generateFlashcards()" id="generate-btn"
             class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             Generate Flashcards
+        </button>
+        <button onclick="cancelGeneration()" id="cancel-generate-btn"
+            class="hidden px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors">
+            Cancel
         </button>
         <span id="flashcard-status" class="text-sm"></span>
     </div>

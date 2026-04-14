@@ -11,6 +11,8 @@ let currentClassName = null;
 let allFlashcards = [];      // full flashcard list for search/pagination
 let flashcardPage = 1;
 let currentSetId = null;     // selected flashcard set (null = all)
+let currentSetName = 'All sets';
+let generateController = null;  // AbortController for flashcard generation
 const FLASHCARDS_PER_PAGE = 25;
 
 // ---------------------------------------------------------------------------
@@ -522,7 +524,6 @@ async function clearChat() {
 // ---------------------------------------------------------------------------
 // Flashcard Sets + Flashcards with search + pagination
 // ---------------------------------------------------------------------------
-let currentSetName = 'All sets';
 
 async function loadFlashcardSets() {
     if (!currentClassId) return;
@@ -758,8 +759,13 @@ async function deleteFlashcard(id) {
             allFlashcards = allFlashcards.filter(fc => fc.id !== id);
             renderCurrentFlashcards();
             showToast('Flashcard deleted');
-            // Update set counts
-            loadFlashcardSets();
+            // Update set counts while preserving current selection
+            const savedSetId = currentSetId;
+            await loadFlashcardSets();
+            if (savedSetId) {
+                const item = document.querySelector(`#set-dropdown-list li[data-value="${savedSetId}"]`);
+                if (item) selectSet(item);
+            }
         } else {
             showToast('Failed to delete flashcard.', 'error');
         }
@@ -827,20 +833,29 @@ function cancelEditFlashcard(id) {
 async function generateFlashcards() {
     if (!currentClassId) return;
     const topic = document.getElementById('flashcard-topic').value.trim();
-    const count = parseInt(document.getElementById('flashcard-count').value);
     const btn = document.getElementById('generate-btn');
-    btn.disabled = true;
-    btn.textContent = 'Generating...';
+    const cancelBtn = document.getElementById('cancel-generate-btn');
+    btn.classList.add('hidden');
+    cancelBtn.classList.remove('hidden');
     showStatus('flashcard-status', 'Generating flashcards — this may take a moment...', 'info');
+
+    generateController = new AbortController();
 
     try {
         const res = await fetch(`/api/classes/${currentClassId}/flashcards`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ topic, count }),
+            body: JSON.stringify({ topic }),
+            signal: generateController.signal,
         });
         const data = await res.json();
         if (!res.ok) { showStatus('flashcard-status', data.error, 'error'); return; }
+
+        if (data.cancelled) {
+            showStatus('flashcard-status', 'Generation cancelled.', 'info');
+            showToast('Generation cancelled');
+            return;
+        }
 
         let msg = `${data.generated} flashcards generated from ${data.class_name} materials.`;
         if (data.total > data.generated) msg += ` (${data.total} total saved)`;
@@ -854,11 +869,22 @@ async function generateFlashcards() {
             if (item) selectSet(item);
         }
     } catch (e) {
-        showStatus('flashcard-status', 'Something went wrong. Please try again.', 'error');
+        if (e.name === 'AbortError') {
+            showStatus('flashcard-status', 'Generation cancelled.', 'info');
+            showToast('Generation cancelled');
+        } else {
+            showStatus('flashcard-status', 'Something went wrong. Please try again.', 'error');
+        }
     } finally {
-        btn.disabled = false;
-        btn.textContent = 'Generate Flashcards';
+        generateController = null;
+        btn.classList.remove('hidden');
+        cancelBtn.classList.add('hidden');
     }
+}
+
+async function cancelGeneration() {
+    fetch('/api/flashcards/cancel', { method: 'POST' });
+    if (generateController) generateController.abort();
 }
 
 async function exportFlashcards() {

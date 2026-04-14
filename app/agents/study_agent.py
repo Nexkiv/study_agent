@@ -13,7 +13,7 @@ from typing import List, Dict, Tuple
 from app.agents.chat_agent import get_async_openai_client, create_search_tool, create_list_sections_tool
 from app.agents.run_agent import run_agent
 from app.agents.tools import ToolBox
-from app.config import DEFAULT_CHAT_MODEL, FLASHCARD_DEFAULT_N_RESULTS
+from app.config import DEFAULT_CHAT_MODEL, DEFAULT_STRUCTURED_MODEL, FLASHCARD_DEFAULT_N_RESULTS
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,8 @@ Art history flashcard format:
   * For terms: Definition + example of usage
 
 Quality guidelines:
-- Generate flashcards for ALL content found **in the search results**
-- Count should match the search results content (not your knowledge base)
+- Generate ONE flashcard for EVERY distinct item found in the search results — do not skip or summarize
+- Be exhaustive: if the materials list 60 terms, generate 60 flashcards
 - **Verify each term exists in search results before adding**
 - **Avoid duplicates**: If you see the same term/artwork multiple times, create only ONE flashcard
 - Focus on testable facts (who, what, when, where) **from the materials**
@@ -76,7 +76,7 @@ Example good flashcard:
 Term: "Jan van Eyck, Arnolfini Portrait, 1434"
 Definition: "Northern Renaissance oil painting depicting Giovanni Arnolfini and his wife. Showcases van Eyck's mastery of oil technique with incredible detail in fabrics, mirror reflection, and symbolic objects. Exemplifies Northern Renaissance realism and symbolism."
 
-IMPORTANT: After searching for relevant information, you MUST call the generate_flashcards_structured tool to create the final flashcards."""
+IMPORTANT: After searching for relevant information, you MUST call the generate_flashcards_structured tool to create the final flashcards. Include ALL items found — do not cap or limit the number."""
 
 # Structured output schema for flashcard generation
 FLASHCARD_SCHEMA = {
@@ -106,6 +106,84 @@ FLASHCARD_SCHEMA = {
 }
 
 
+CATEGORY_FILTER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "matches": {"type": "boolean"}
+                },
+                "required": ["index", "matches"],
+                "additionalProperties": False
+            }
+        }
+    },
+    "required": ["results"],
+    "additionalProperties": False
+}
+
+
+async def filter_flashcards_by_category(
+    client,
+    flashcards: List[Dict[str, str]],
+    categories: List[str],
+) -> List[Dict[str, str]]:
+    """
+    Post-process flashcards to remove items that don't match requested categories.
+
+    Uses a structured output call to classify each flashcard term as matching
+    or not matching the requested categories (e.g., "people", "terms", "artworks").
+    """
+    if not flashcards or not categories:
+        return flashcards
+
+    category_str = ", ".join(categories)
+    terms_list = "\n".join(f"{i}: {card['term']}" for i, card in enumerate(flashcards))
+
+    response = await client.responses.create(
+        model=DEFAULT_CHAT_MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a classifier. You MUST return a result for EVERY item in the list.\n"
+                    f"For each item, determine if it is a {category_str}.\n"
+                    "Return matches=true for items that match the category.\n"
+                    "Return matches=false ONLY for items that are clearly NOT in the category "
+                    "(e.g., general terminology, art techniques, concepts, or architectural features "
+                    "when the category is people). When in doubt, return matches=true."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Classify EVERY item below — does it refer to a {category_str}? You must return one result per item.\n\n{terms_list}"
+            }
+        ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "category_filter",
+                "schema": CATEGORY_FILTER_SCHEMA,
+                "strict": True
+            }
+        }
+    )
+
+    result = json.loads(response.output[0].content[0].text)
+    remove_indices = {r["index"] for r in result["results"] if not r["matches"]}
+
+    filtered = [card for i, card in enumerate(flashcards) if i not in remove_indices]
+    removed_count = len(flashcards) - len(filtered)
+    if removed_count > 0:
+        logger.info(f"Category filter removed {removed_count} flashcards not matching: {category_str}")
+
+    return filtered
+
+
 def create_study_agent_config(class_name: str) -> dict:
     """
     Create agent configuration for flashcard generation.
@@ -131,7 +209,6 @@ def create_study_agent_config(class_name: str) -> dict:
 async def generate_flashcards_for_topic(
     class_name: str,
     topic: str,
-    count: int = 60
 ) -> Tuple[List[Dict[str, str]], str]:
     """
     Main entry point for flashcard generation.
@@ -141,10 +218,12 @@ async def generate_flashcards_for_topic(
     2. Calls generate_flashcards_structured tool with retrieved context
     3. Returns structured flashcard data
 
+    Generates one flashcard per matching item found in the materials —
+    the count is determined by the content, not a user-specified number.
+
     Args:
         class_name: Name of the class to generate flashcards for
         topic: User's topic/request (can be vague like "Baroque period")
-        count: Target number of flashcards to generate (default 15)
 
     Returns:
         Tuple of (flashcards_list, status_message)
@@ -170,24 +249,24 @@ async def generate_flashcards_for_topic(
 
     # Register generate_flashcards_structured tool
     @toolbox.tool
-    async def generate_flashcards_structured(context: str, topic: str, count: int = 60) -> str:
+    async def generate_flashcards_structured(context: str, topic: str) -> str:
         """
         Generate flashcards using OpenAI Structured Outputs.
 
         This tool uses the Structured Outputs API to generate flashcards
-        with guaranteed JSON schema validation.
+        with guaranteed JSON schema validation. Generates one flashcard
+        for every distinct item found in the context.
 
         Args:
             context: Retrieved course material text from search
             topic: User's requested topic
-            count: Number of flashcards to generate (default 15)
 
         Returns:
             JSON string with flashcard array for agent consumption
         """
         nonlocal generated_flashcards  # Access closure variable
 
-        logger.info(f"Calling Structured Outputs API for {count} flashcards on '{topic}'")
+        logger.info(f"Calling Structured Outputs API for flashcards on '{topic}'")
 
         try:
             # Call OpenAI with Structured Outputs
@@ -200,7 +279,7 @@ async def generate_flashcards_for_topic(
                     },
                     {
                         "role": "user",
-                        "content": f"Context from course materials:\n\n{context}\n\nGenerate {count} high-quality flashcards on the topic: {topic}\n\nFocus on artworks, artists, movements, and key terminology."
+                        "content": f"Context from course materials:\n\n{context}\n\nGenerate one flashcard for EVERY distinct item in the context above on the topic: {topic}\n\nDo not skip any items. Be exhaustive — if there are 60 items, generate 60 flashcards. Focus on artworks, artists, movements, and key terminology as they appear in the context."
                     }
                 ],
                 text={
@@ -311,11 +390,13 @@ async def generate_flashcards_for_topic(
         f"  {chr(10).join(scope_guidance)}\n"
         f"{'  ' + chr(10).join(exclusions) + chr(10) if exclusions else ''}"
         f"- Every flashcard must be traceable to the search results\n\n"
-        f"Generate flashcards for ALL relevant content found IN THE SEARCH RESULTS matching user's request.\n\n"
+        f"Generate ONE flashcard for EVERY matching item found IN THE SEARCH RESULTS.\n"
+        f"Do NOT skip items or cap the number — if there are 60 terms, generate 60 flashcards.\n\n"
         f"Before finalizing, verify:\n"
         f"1. Each flashcard appears in search results (no hallucinations from your knowledge)\n"
-        f"2. Flashcards match user's request scope (terms/people/artworks as specified)\n\n"
-        f"Then use generate_flashcards_structured to create the flashcards."
+        f"2. Flashcards match user's request scope (terms/people/artworks as specified)\n"
+        f"3. You have not skipped any items from the search results\n\n"
+        f"Then use generate_flashcards_structured with ALL gathered context to create the flashcards."
     )
 
     try:
@@ -343,6 +424,20 @@ async def generate_flashcards_for_topic(
                     deduplicated.append(card)
 
             duplicate_count = original_count - len(deduplicated)
+
+            # Post-process: filter by category if user requested specific types
+            has_specific_intent = wants_terms or wants_people or wants_artworks
+            all_intents = wants_terms and wants_people and wants_artworks
+            if has_specific_intent and not all_intents:
+                categories = []
+                if wants_people:
+                    categories.append("person or individual (artist, ruler, historical figure)")
+                if wants_terms:
+                    categories.append("term, concept, or definition")
+                if wants_artworks:
+                    categories.append("specific artwork (painting, sculpture, or architectural work)")
+                deduplicated = await filter_flashcards_by_category(client, deduplicated, categories)
+
             status = f"Generated {len(deduplicated)} flashcards."
             logger.info(status)
             return deduplicated, status

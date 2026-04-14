@@ -25,7 +25,7 @@ from app.agents.chat_agent import (
     correct_spelling,
     search_web,
 )
-from app.agents.run_agent import run_agent
+from app.agents.run_agent import run_agent, cancel_agent, reset_cancel, AgentCancelled
 from app.agents.tools import ToolBox
 from app.agents.study_agent import generate_flashcards_for_topic
 
@@ -515,7 +515,6 @@ def generate_flashcards(class_id):
 
     data = request.get_json() or {}
     topic = (data.get('topic') or '').strip()
-    count = data.get('count', 15)
 
     # Determine set name from topic
     if topic:
@@ -527,8 +526,9 @@ def generate_flashcards(class_id):
         agent_topic = "all major topics covered in the course materials"
 
     try:
+        reset_cancel()
         flashcards, _ = asyncio.run(
-            generate_flashcards_for_topic(class_obj.name, agent_topic, count=count)
+            generate_flashcards_for_topic(class_obj.name, agent_topic)
         )
 
         if not flashcards:
@@ -562,6 +562,9 @@ def generate_flashcards(class_id):
             'set_name': new_set.name,
         }), 201
 
+    except AgentCancelled:
+        return jsonify({'cancelled': True, 'message': 'Generation cancelled.'}), 200
+
     except Exception as e:
         error_str = str(e)
         if "context_length_exceeded" in error_str or "context window" in error_str:
@@ -570,6 +573,13 @@ def generate_flashcards(class_id):
                          'Try a more specific topic, or remove some files and try again.'
             }), 400
         return jsonify({'error': 'Something went wrong generating flashcards. Please try again.'}), 500
+
+
+@api_bp.route('/flashcards/cancel', methods=['POST'])
+def cancel_flashcard_generation():
+    """Cancel an in-progress flashcard generation."""
+    cancel_agent()
+    return jsonify({'message': 'Cancel signal sent.'}), 200
 
 
 @api_bp.route('/flashcards/<int:flashcard_id>', methods=['PUT'])
