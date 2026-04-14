@@ -1,82 +1,25 @@
 """
 Study agent for flashcard generation using OpenAI Structured Outputs.
 
-This module implements intelligent, RAG-based flashcard generation where
-the agent uses search_class_materials to find relevant content and then
-generates flashcards with guaranteed JSON structure.
+This module implements flashcard generation with:
+- LLM-based intent parsing (domain-agnostic)
+- Deterministic multi-query search (parallel, no agent loop)
+- Direct structured output generation (no agent overhead)
+- Post-processing: exact dedup, fuzzy dedup, category filter
 """
 
+import asyncio
 import json
 import logging
 from typing import List, Dict, Tuple
 
-from app.agents.chat_agent import get_async_openai_client, create_search_tool, create_list_sections_tool
-from app.agents.run_agent import run_agent
-from app.agents.tools import ToolBox
-from app.config import DEFAULT_CHAT_MODEL, DEFAULT_STRUCTURED_MODEL, FLASHCARD_DEFAULT_N_RESULTS
+from rapidfuzz import fuzz
+
+from app.agents.chat_agent import get_async_openai_client, create_search_tool
+from app.agents.run_agent import _cancel_flag, AgentCancelled
+from app.config import DEFAULT_CHAT_MODEL, FLASHCARD_DEFAULT_N_RESULTS
 
 logger = logging.getLogger(__name__)
-
-# System prompt for art history flashcard generation
-ART_HISTORY_FLASHCARD_PROMPT = """You are an expert art history flashcard generator.
-
-Your goal: Create high-quality study flashcards from the student's uploaded course materials.
-
-Process:
-1. Call list_sections to see all available sections in the materials
-2. Search each relevant section using search_class_materials with the section filter
-3. Extract key information from ALL search results: artworks, artists, movements, terms, dates
-4. Generate flashcards using generate_flashcards_structured tool with ALL gathered content
-
-**CRITICAL CONSTRAINTS - Read Carefully**:
-1. **Content Source - NO HALLUCINATIONS**:
-   - ONLY create flashcards from content found in the search results above
-   - Do NOT add information from your general knowledge base about art history
-   - Do NOT include terms, artists, artworks, or movements unless they appear in the search results
-   - If you think of something relevant but don't see it in search results, DO NOT include it
-   - Stick strictly to the uploaded study materials - no external knowledge
-
-2. **Respect User Intent**:
-   - The user will specify what type of flashcards they want (terms, people, artworks, etc.)
-   - Generate flashcards matching their request ONLY
-   - If user asks for "terms and people", do NOT include artworks
-   - If user asks for "artworks", do NOT include general terminology
-   - Stay focused on what the user specifically requested
-
-Example of what NOT to do:
-❌ Adding "Baroque" because you know it's important (not in search results - HALLUCINATION)
-❌ Adding "Cubism" because it follows in art history (not in search results - HALLUCINATION)
-❌ Adding "Last Supper" when user asked for "terms and people" (wrong scope - not respecting user intent)
-❌ Adding general definitions you know but didn't find in search results
-
-Example of what TO do:
-✅ When user asks for "terms and people": Include "Fresco" (term) and "Jan van Eyck" (person), exclude "Last Supper" (artwork)
-✅ When user asks for "artworks": Include "Last Supper", "Pietà", "Birth of Venus"
-✅ When user asks for "terms": Include only terminology like "Contrapposto", "Memento Mori"
-✅ Always verify each flashcard exists in search results (no hallucinations)
-
-Art history flashcard format:
-- Term: Artist name, artwork title, period/style, or terminology
-- Definition: Clear, concise explanation including:
-  * For artworks: Artist, date, medium, style, key characteristics
-  * For movements: Time period, key characteristics, major artists
-  * For terms: Definition + example of usage
-
-Quality guidelines:
-- Generate ONE flashcard for EVERY distinct item found in the search results — do not skip or summarize
-- Be exhaustive: if the materials list 60 terms, generate 60 flashcards
-- **Verify each term exists in search results before adding**
-- **Avoid duplicates**: If you see the same term/artwork multiple times, create only ONE flashcard
-- Focus on testable facts (who, what, when, where) **from the materials**
-- Use proper art historical terminology **as it appears in the materials**
-- Include specific dates when provided in search results
-- Connect artworks to broader movements **only if shown in search results**
-
-Example good flashcard:
-Term: "Jan van Eyck, Arnolfini Portrait, 1434"
-Definition: "Northern Renaissance oil painting depicting Giovanni Arnolfini and his wife. Showcases van Eyck's mastery of oil technique with incredible detail in fabrics, mirror reflection, and symbolic objects. Exemplifies Northern Renaissance realism and symbolism."
-
-IMPORTANT: After searching for relevant information, you MUST call the generate_flashcards_structured tool to create the final flashcards. Include ALL items found — do not cap or limit the number."""
 
 # Structured output schema for flashcard generation
 FLASHCARD_SCHEMA = {
@@ -89,7 +32,7 @@ FLASHCARD_SCHEMA = {
                 "properties": {
                     "term": {
                         "type": "string",
-                        "description": "Artist/artwork/term/movement name"
+                        "description": "Term, concept, or key item name"
                     },
                     "definition": {
                         "type": "string",
@@ -127,6 +70,160 @@ CATEGORY_FILTER_SCHEMA = {
 }
 
 
+INTENT_PARSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "user_category": {
+            "type": "string",
+            "description": "What the user wants flashcards about (e.g., 'artists and people', 'places and locations', 'key terms and vocabulary'). Use 'all topics' if the user wants everything."
+        },
+        "is_specific_category": {
+            "type": "boolean",
+            "description": "True if the user asked for a specific subset of content, false if they want everything."
+        },
+        "search_queries": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "2-4 semantic search queries to find this category of content in course materials."
+        }
+    },
+    "required": ["user_category", "is_specific_category", "search_queries"],
+    "additionalProperties": False
+}
+
+
+def _check_cancelled():
+    """Check if generation has been cancelled and raise if so."""
+    if _cancel_flag.is_set():
+        logger.info("Flashcard generation cancelled by user")
+        raise AgentCancelled("Generation cancelled by user")
+
+
+async def parse_user_intent(client, topic: str) -> dict:
+    """
+    Use LLM to parse the user's topic into a structured intent.
+
+    Returns dict with user_category, is_specific_category, and search_queries.
+    Domain-agnostic — works for any subject.
+    """
+    response = await client.responses.create(
+        model=DEFAULT_CHAT_MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": (
+                    "You parse a student's flashcard request into structured intent.\n"
+                    "Determine what category of content they want and generate search queries to find it.\n\n"
+                    "Examples:\n"
+                    '- "Artists and People" → category: "people (artists, historical figures, individuals)", specific: true, queries: ["artists", "people", "historical figures", "individuals"]\n'
+                    '- "Places to Know" → category: "places and locations (cities, regions, buildings, sites)", specific: true, queries: ["places", "locations", "cities", "buildings"]\n'
+                    '- "Key Terms" → category: "terms, concepts, and definitions", specific: true, queries: ["terms", "definitions", "concepts", "vocabulary"]\n'
+                    '- "Early Northern Renaissance" → category: "all topics", specific: false, queries: ["Early Northern Renaissance"]\n'
+                    '- "Everything about Chapter 5" → category: "all topics", specific: false, queries: ["Chapter 5"]\n'
+                    '- "Artworks and paintings" → category: "specific artworks (paintings, sculptures, architectural works)", specific: true, queries: ["artworks", "paintings", "sculptures", "works"]\n'
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Parse this flashcard request: \"{topic}\""
+            }
+        ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "intent_parse",
+                "schema": INTENT_PARSE_SCHEMA,
+                "strict": True
+            }
+        }
+    )
+
+    result = json.loads(response.output[0].content[0].text)
+    logger.info(f"Parsed intent: category='{result['user_category']}', specific={result['is_specific_category']}, queries={result['search_queries']}")
+    return result
+
+
+async def gather_section_content(class_name: str, search_queries: List[str]) -> str:
+    """
+    Gather relevant content via parallel broad searches (no per-section explosion).
+
+    Fires one search per query (3-4 embedding calls total) without section filters.
+    ChromaDB semantic search already returns the most relevant chunks across all sections.
+
+    Returns concatenated context string.
+    """
+    search_fn = create_search_tool(class_name, default_n_results=FLASHCARD_DEFAULT_N_RESULTS)
+
+    # Fire all queries in parallel — broad search (no section filter)
+    all_results = await asyncio.gather(*[
+        search_fn(query=q, section="", keyword="")
+        for q in search_queries
+    ])
+
+    # Deduplicate chunks by content
+    seen_chunks = set()
+    unique_chunks = []
+    for result_text in all_results:
+        if result_text.startswith("No ") or result_text.startswith("Error") or result_text.startswith("Search error"):
+            continue
+        for chunk in result_text.split("\n---\n"):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            # Use first 200 chars as dedup key
+            dedup_key = chunk[:200].strip().lower()
+            if dedup_key not in seen_chunks:
+                seen_chunks.add(dedup_key)
+                unique_chunks.append(chunk)
+
+    logger.info(f"Gathered {len(unique_chunks)} unique chunks from {len(search_queries)} searches")
+    return "\n\n---\n\n".join(unique_chunks)
+
+
+def fuzzy_deduplicate(flashcards: List[Dict[str, str]], threshold: int = 80) -> List[Dict[str, str]]:
+    """
+    Merge near-duplicate flashcards using rapidfuzz.
+
+    Catches cases like "Jan van Eyck" / "Van Eyck" or "Limbourg Brothers" / "The Limbourg Brothers".
+    When duplicates are found, keeps the longer/more complete term and its definition.
+    """
+    if not flashcards:
+        return flashcards
+
+    kept = []  # List of (term_lower, card)
+
+    for card in flashcards:
+        term = card['term'].strip()
+        term_lower = term.lower()
+        is_duplicate = False
+
+        for i, (existing_lower, existing_card) in enumerate(kept):
+            # Check substring containment
+            if term_lower in existing_lower or existing_lower in term_lower:
+                is_duplicate = True
+            # Check fuzzy similarity
+            elif fuzz.ratio(term_lower, existing_lower) >= threshold:
+                is_duplicate = True
+
+            if is_duplicate:
+                # Keep the longer/more complete term
+                if len(term) > len(existing_card['term'].strip()):
+                    kept[i] = (term_lower, card)
+                    logger.debug(f"Fuzzy dedup: replaced '{existing_card['term']}' with '{term}'")
+                else:
+                    logger.debug(f"Fuzzy dedup: dropped '{term}' (keeping '{existing_card['term']}')")
+                break
+
+        if not is_duplicate:
+            kept.append((term_lower, card))
+
+    result = [card for _, card in kept]
+    removed = len(flashcards) - len(result)
+    if removed > 0:
+        logger.info(f"Fuzzy dedup removed {removed} near-duplicate flashcards")
+    return result
+
+
 async def filter_flashcards_by_category(
     client,
     flashcards: List[Dict[str, str]],
@@ -136,7 +233,7 @@ async def filter_flashcards_by_category(
     Post-process flashcards to remove items that don't match requested categories.
 
     Uses a structured output call to classify each flashcard term as matching
-    or not matching the requested categories (e.g., "people", "terms", "artworks").
+    or not matching the requested categories.
     """
     if not flashcards or not categories:
         return flashcards
@@ -150,12 +247,12 @@ async def filter_flashcards_by_category(
             {
                 "role": "system",
                 "content": (
-                    "You are a classifier. You MUST return a result for EVERY item in the list.\n"
+                    "You are a strict classifier. You MUST return a result for EVERY item in the list.\n"
                     f"For each item, determine if it is a {category_str}.\n"
-                    "Return matches=true for items that match the category.\n"
-                    "Return matches=false ONLY for items that are clearly NOT in the category "
-                    "(e.g., general terminology, art techniques, concepts, or architectural features "
-                    "when the category is people). When in doubt, return matches=true."
+                    "Return matches=true ONLY for items that clearly belong to the requested category.\n"
+                    "Return matches=false for items that do not clearly fit the category.\n"
+                    "When in doubt, return matches=false — it is better to exclude a borderline item "
+                    "than to include something irrelevant."
                 )
             },
             {
@@ -184,28 +281,6 @@ async def filter_flashcards_by_category(
     return filtered
 
 
-def create_study_agent_config(class_name: str) -> dict:
-    """
-    Create agent configuration for flashcard generation.
-
-    Args:
-        class_name: Name of the class to generate flashcards for
-
-    Returns:
-        Agent configuration dict with system prompt, model, tools, kwargs
-    """
-    return {
-        "name": "study_agent",
-        "description": f"Art history flashcard generator for {class_name}",
-        "model": DEFAULT_CHAT_MODEL,  # gpt-4o-mini supports both tool use and structured outputs
-        "prompt": ART_HISTORY_FLASHCARD_PROMPT,
-        "tools": ["search_class_materials", "list_sections", "generate_flashcards_structured"],
-        "kwargs": {
-            "temperature": 0.5  # Lower temperature for more consistent flashcard quality
-        }
-    }
-
-
 async def generate_flashcards_for_topic(
     class_name: str,
     topic: str,
@@ -213,241 +288,122 @@ async def generate_flashcards_for_topic(
     """
     Main entry point for flashcard generation.
 
-    Uses an agentic approach where the model:
-    1. Searches for relevant materials using search_class_materials tool
-    2. Calls generate_flashcards_structured tool with retrieved context
-    3. Returns structured flashcard data
-
-    Generates one flashcard per matching item found in the materials —
-    the count is determined by the content, not a user-specified number.
+    Pipeline:
+    1. LLM intent parse — understand what category of content the user wants
+    2. Parallel broad searches — gather relevant content (3-4 embedding calls)
+    3. Direct structured output — generate flashcards (no agent loop overhead)
+    4. Post-processing — exact dedup, fuzzy dedup, category filter
 
     Args:
         class_name: Name of the class to generate flashcards for
-        topic: User's topic/request (can be vague like "Baroque period")
+        topic: User's topic/request (e.g., "Artists and People", "Places to Know")
 
     Returns:
         Tuple of (flashcards_list, status_message)
-        - flashcards_list: List of dicts with 'term' and 'definition' keys
-        - status_message: Status info about agent execution
-
-    Raises:
-        Exception: If agent fails or structured output is invalid
     """
     logger.info(f"Generating flashcards for class '{class_name}' on topic: {topic}")
 
-    # Create toolbox for this session
-    toolbox = ToolBox()
     client = get_async_openai_client()
 
-    # Store flashcards in closure variable that tool can access
-    generated_flashcards = []
+    # Step 1: Parse user intent
+    intent = await parse_user_intent(client, topic)
+    user_category = intent["user_category"]
+    is_specific_category = intent["is_specific_category"]
+    search_queries = intent["search_queries"]
 
-    search_tool = create_search_tool(class_name, default_n_results=FLASHCARD_DEFAULT_N_RESULTS)
-    list_sections_tool = create_list_sections_tool(class_name)
-    toolbox.tool(search_tool)
-    toolbox.tool(list_sections_tool)
+    _check_cancelled()
 
-    # Register generate_flashcards_structured tool
-    @toolbox.tool
-    async def generate_flashcards_structured(context: str, topic: str) -> str:
-        """
-        Generate flashcards using OpenAI Structured Outputs.
+    # Step 2: Gather content via parallel broad searches
+    context = await gather_section_content(class_name, search_queries)
 
-        This tool uses the Structured Outputs API to generate flashcards
-        with guaranteed JSON schema validation. Generates one flashcard
-        for every distinct item found in the context.
+    if not context.strip():
+        return [], "No relevant materials found. Please upload course materials first."
 
-        Args:
-            context: Retrieved course material text from search
-            topic: User's requested topic
+    _check_cancelled()
 
-        Returns:
-            JSON string with flashcard array for agent consumption
-        """
-        nonlocal generated_flashcards  # Access closure variable
+    # Step 3: Direct structured output call (no agent loop)
+    logger.info(f"Calling Structured Outputs API for flashcards on '{topic}'")
 
-        logger.info(f"Calling Structured Outputs API for flashcards on '{topic}'")
-
-        try:
-            # Call OpenAI with Structured Outputs
-            response = await client.responses.create(
-                model=DEFAULT_CHAT_MODEL,
-                input=[
-                    {
-                        "role": "system",
-                        "content": "You are generating art history flashcards. Extract key information from the context and create clear, testable flashcards."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Context from course materials:\n\n{context}\n\nGenerate one flashcard for EVERY distinct item in the context above on the topic: {topic}\n\nDo not skip any items. Be exhaustive — if there are 60 items, generate 60 flashcards. Focus on artworks, artists, movements, and key terminology as they appear in the context."
-                    }
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "flashcard_set",
-                        "schema": FLASHCARD_SCHEMA,
-                        "strict": True
-                    }
-                }
-            )
-
-            # Extract the structured output
-            # response.output[0].content is a LIST of content blocks
-            message_content = response.output[0].content
-            if not message_content or len(message_content) == 0:
-                logger.error("No content blocks in response")
-                return "Error: Response contained no content blocks"
-
-            # Get text from first content block
-            flashcard_json = message_content[0].text
-            if not flashcard_json:
-                logger.error("Empty text in content block")
-                return "Error: Content block was empty"
-
-            # Parse JSON
-            result = json.loads(flashcard_json)
-
-            # Validate structure
-            if 'flashcards' not in result:
-                logger.error("Response missing 'flashcards' key")
-                return "Error: Response missing 'flashcards' key"
-
-            # Store flashcards in closure variable
-            generated_flashcards = result['flashcards']
-            logger.info(f"Generated {len(generated_flashcards)} flashcards")
-
-            # Return success message for agent
-            return f"Successfully generated {len(generated_flashcards)} flashcards. The flashcards have been created and are ready to use."
-
-        except Exception as e:
-            logger.error(f"Structured output generation failed: {e}")
-            return f"Error generating flashcards: {str(e)}"
-
-    # Create agent config
-    agent_config = create_study_agent_config(class_name)
-
-    # Parse user's request to understand what they want
-    topic_lower = topic.lower()
-    wants_terms = 'term' in topic_lower or 'definition' in topic_lower or 'concept' in topic_lower
-    wants_people = 'people' in topic_lower or 'individual' in topic_lower or 'artist' in topic_lower or 'person' in topic_lower
-    wants_artworks = 'artwork' in topic_lower or 'painting' in topic_lower or 'sculpture' in topic_lower or 'piece' in topic_lower
-
-    # Build a single comprehensive search query
-    query_parts = []
-    if wants_terms:
-        query_parts.append("terms definitions concepts")
-    if wants_people:
-        query_parts.append("artists individuals people")
-    if wants_artworks:
-        query_parts.append("artworks paintings sculptures")
-
-    # Fallback if no specific intent detected
-    if not query_parts:
-        query_parts = ["terms definitions concepts artists artworks"]
-
-    # Add topic to query
-    query_parts.append(topic)
-
-    comprehensive_query = " ".join(query_parts)
-    search_instructions = [
-        f"1. Call list_sections to see all available sections",
-        f"2. Search each relevant section using search_class_materials with section filter and query '{comprehensive_query}'",
-    ]
-
-    # Build scope guidance
-    scope_guidance = []
-    if wants_terms:
-        scope_guidance.append("✅ INCLUDE: Terms and definitions (e.g., 'Fresco', 'Contrapposto')")
-    if wants_people:
-        scope_guidance.append("✅ INCLUDE: People and individuals (e.g., 'Jan van Eyck', 'Martin Luther')")
-    if wants_artworks:
-        scope_guidance.append("✅ INCLUDE: Specific artworks (e.g., 'Last Supper', 'Pietà')")
-
-    # Exclusions based on what user DIDN'T ask for
-    exclusions = []
-    if not wants_artworks and (wants_terms or wants_people):
-        exclusions.append("❌ EXCLUDE: Specific artwork titles (user didn't ask for artworks)")
-    if not wants_terms and (wants_people or wants_artworks):
-        exclusions.append("❌ EXCLUDE: General terminology (user didn't ask for terms)")
-    if not wants_people and (wants_terms or wants_artworks):
-        exclusions.append("❌ EXCLUDE: Artist/people names (user didn't ask for people)")
-
-    # Prepare user message with intent-based instructions
-    user_message = (
-        f"Generate flashcards based on: {topic}\n\n"
-        f"USER'S REQUEST ANALYSIS:\n"
-        f"{'- User wants: TERMS (definitions, concepts)\n' if wants_terms else ''}"
-        f"{'- User wants: PEOPLE (artists, individuals)\n' if wants_people else ''}"
-        f"{'- User wants: ARTWORKS (specific pieces)\n' if wants_artworks else ''}"
-        f"\n"
-        f"Search strategy:\n"
-        f"{chr(10).join(search_instructions)}\n\n"
-        f"CRITICAL CONSTRAINTS:\n"
-        f"- Only create flashcards from content found in the search results above (NO HALLUCINATIONS)\n"
-        f"- Do NOT add anything from your general knowledge base\n"
-        f"- Respect user's request - generate ONLY what they asked for:\n"
-        f"  {chr(10).join(scope_guidance)}\n"
-        f"{'  ' + chr(10).join(exclusions) + chr(10) if exclusions else ''}"
-        f"- Every flashcard must be traceable to the search results\n\n"
-        f"Generate ONE flashcard for EVERY matching item found IN THE SEARCH RESULTS.\n"
-        f"Do NOT skip items or cap the number — if there are 60 terms, generate 60 flashcards.\n\n"
-        f"Before finalizing, verify:\n"
-        f"1. Each flashcard appears in search results (no hallucinations from your knowledge)\n"
-        f"2. Flashcards match user's request scope (terms/people/artworks as specified)\n"
-        f"3. You have not skipped any items from the search results\n\n"
-        f"Then use generate_flashcards_structured with ALL gathered context to create the flashcards."
+    system_content = "You are generating study flashcards from course materials."
+    if is_specific_category:
+        system_content += f" The user specifically requested: {user_category}. Only include items that match this category."
+    system_content += (
+        " Extract key information from the context and create clear, testable flashcards."
+        "\n\nCRITICAL: Only create flashcards from the provided context. Do NOT add information from your general knowledge."
+        " Be exhaustive — generate ONE flashcard for EVERY distinct matching item. Do not skip items or cap the number."
     )
 
+    user_content = (
+        f"Context from course materials:\n\n{context}\n\n"
+        f"Generate one flashcard for EVERY distinct item in the context above on the topic: {topic}\n\n"
+        f"Do not skip any items. Be exhaustive — if there are 60 items, generate 60 flashcards."
+    )
+    if is_specific_category:
+        user_content += f"\n\nFocus specifically on items matching: {user_category}. Do NOT include items from other categories."
+    else:
+        user_content += "\n\nInclude all relevant items: terms, concepts, people, works, and key details as they appear in the context."
+
     try:
-        # Run agent loop
-        response_text = await run_agent(
-            client=client,
-            toolbox=toolbox,
-            agent=agent_config,
-            user_message=user_message,
-            history=[],
-            usage=None
+        response = await client.responses.create(
+            model=DEFAULT_CHAT_MODEL,
+            input=[
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content}
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "flashcard_set",
+                    "schema": FLASHCARD_SCHEMA,
+                    "strict": True
+                }
+            }
         )
 
-        # Check if flashcards were generated
-        if generated_flashcards:
-            # Deduplicate flashcards (case-insensitive, keep first occurrence)
-            seen_terms = set()
-            deduplicated = []
-            original_count = len(generated_flashcards)
+        message_content = response.output[0].content
+        if not message_content or len(message_content) == 0:
+            return [], "No flashcards generated — empty response from API."
 
-            for card in generated_flashcards:
-                term_lower = card['term'].lower().strip()
-                if term_lower not in seen_terms:
-                    seen_terms.add(term_lower)
-                    deduplicated.append(card)
+        flashcard_json = message_content[0].text
+        if not flashcard_json:
+            return [], "No flashcards generated — empty content block."
 
-            duplicate_count = original_count - len(deduplicated)
+        result = json.loads(flashcard_json)
+        if 'flashcards' not in result:
+            return [], "No flashcards generated — invalid response format."
 
-            # Post-process: filter by category if user requested specific types
-            has_specific_intent = wants_terms or wants_people or wants_artworks
-            all_intents = wants_terms and wants_people and wants_artworks
-            if has_specific_intent and not all_intents:
-                categories = []
-                if wants_people:
-                    categories.append("person or individual (artist, ruler, historical figure)")
-                if wants_terms:
-                    categories.append("term, concept, or definition")
-                if wants_artworks:
-                    categories.append("specific artwork (painting, sculpture, or architectural work)")
-                deduplicated = await filter_flashcards_by_category(client, deduplicated, categories)
-
-            status = f"Generated {len(deduplicated)} flashcards."
-            logger.info(status)
-            return deduplicated, status
-        else:
-            # No flashcards generated - agent didn't call the tool or it failed
-            error_msg = "Agent completed but did not generate flashcards. Try a more specific topic or check that materials are uploaded."
-            logger.warning(error_msg)
-            return [], error_msg
+        generated_flashcards = result['flashcards']
+        logger.info(f"Generated {len(generated_flashcards)} raw flashcards")
 
     except Exception as e:
         error_msg = f"Flashcard generation failed: {str(e)}"
         logger.error(error_msg)
         raise Exception(error_msg)
+
+    _check_cancelled()
+
+    # Step 4a: Exact deduplication (case-insensitive)
+    seen_terms = set()
+    deduplicated = []
+    for card in generated_flashcards:
+        term_lower = card['term'].lower().strip()
+        if term_lower not in seen_terms:
+            seen_terms.add(term_lower)
+            deduplicated.append(card)
+
+    exact_dupes = len(generated_flashcards) - len(deduplicated)
+    if exact_dupes > 0:
+        logger.info(f"Exact dedup removed {exact_dupes} duplicates")
+
+    # Step 4b: Fuzzy deduplication (near-duplicates)
+    deduplicated = fuzzy_deduplicate(deduplicated)
+
+    # Step 4c: Category filter (only when user asked for a specific category)
+    if is_specific_category:
+        deduplicated = await filter_flashcards_by_category(
+            client, deduplicated, [user_category]
+        )
+
+    status = f"Generated {len(deduplicated)} flashcards."
+    logger.info(status)
+    return deduplicated, status

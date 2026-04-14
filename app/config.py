@@ -42,7 +42,7 @@ DEFAULT_STRUCTURED_MODEL = 'gpt-5-mini'
 
 # Search result configuration
 CHAT_DEFAULT_N_RESULTS = 30         # Enough to cover all sections + subsections
-FLASHCARD_DEFAULT_N_RESULTS = 60    # Increased to cover all sections in structured study guides
+FLASHCARD_DEFAULT_N_RESULTS = 30    # Multiple queries provide diversity; 30 per query is sufficient
 
 # OCR Configuration
 TESSERACT_CMD = os.getenv('TESSERACT_CMD')  # Optional: override Tesseract path

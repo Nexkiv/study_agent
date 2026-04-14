@@ -41,14 +41,14 @@ Key features:
 - ⏸️ Usage tracking (deferred - usage.py needs OpenAI SDK update)
 
 **✅ Phase 4 - Flashcard Generation (COMPLETE)**
-- ✅ Flashcard generation agent (`app/agents/study_agent.py`)
-  - RAG-based agent with tool use (search_class_materials + generate_flashcards_structured)
-  - OpenAI Structured Outputs with Responses API
-  - System prompt specialized for art history flashcards
-  - Content-driven count: generates one flashcard per matching item (no user-specified count)
-  - Post-processing category filter: LLM classifies and removes off-category items (fail-open logic)
-  - Cancellable generation: server-side `threading.Event` checked in agent loop + client-side AbortController
-  - Bugfix: Correct JSON parsing from response.output[0].content[0].text
+- ✅ Flashcard generation pipeline (`app/agents/study_agent.py`)
+  - Deterministic search + direct structured output (no agent loop overhead)
+  - LLM-based intent parsing: domain-agnostic category detection (works for any subject)
+  - Parallel broad searches via `asyncio.gather` (3-4 embedding calls, not N*M)
+  - OpenAI Structured Outputs with Responses API (direct call, no agent wrapper)
+  - Fuzzy deduplication with rapidfuzz (merges "Van Eyck" / "Jan van Eyck")
+  - Strict category filter: LLM classifies and removes off-category items (when in doubt, exclude)
+  - Cancellable generation: `threading.Event` checked at pipeline stages + client-side AbortController
 - ✅ Export functionality (`app/pipelines/exporters.py`)
   - Quizlet TSV format (tab-separated)
   - Anki CSV format (proper escaping)
@@ -301,7 +301,7 @@ Agent in `app/agents/chat_agent.py` has four tools:
 Uses OpenAI GPT-4o-mini via Responses API. Agent loop in `app/agents/run_agent.py` continues until the model produces a final text response. System prompt enforces anti-hallucination (only facts from search results) and source attribution (grouped "Sources:" section at end of every response).
 
 ### 3. Flashcard Generation with Structured Outputs
-Agent in `app/agents/study_agent.py` uses `list_sections` + per-section `search_class_materials` to find relevant content, then generates flashcards via OpenAI Structured Outputs (JSON schema guarantees valid `{term, definition}` pairs). Auto-creates a `FlashcardSet` per generation, named after the topic. Flashcard count is content-driven — generates one card per matching item found in the materials (no count slider). When users request specific categories (e.g., "people and artists"), a post-processing LLM call classifies each card and removes off-category items using fail-open logic. Generation is cancellable via a `threading.Event` flag checked in the agent loop.
+Pipeline in `app/agents/study_agent.py` uses a 4-step deterministic process (no agent loop): (1) LLM intent parse extracts user's category and search queries — domain-agnostic, handles any subject; (2) parallel broad searches via `asyncio.gather` (3-4 embedding calls); (3) direct OpenAI Structured Outputs call generates flashcards (JSON schema guarantees valid `{term, definition}` pairs); (4) post-processing: exact dedup → fuzzy dedup (rapidfuzz, 80% threshold) → strict category filter (LLM classification, "when in doubt, exclude"). Auto-creates a `FlashcardSet` per generation, named after the topic. Cancellable via `threading.Event` checked at pipeline stages.
 
 ### 4. Code Execution Sandbox
 Restricted `exec()` in `app/agents/chat_agent.py` with whitelisted modules (math, numpy, sympy, statistics, datetime). No builtins exposed. For production, consider Docker isolation.
@@ -422,11 +422,15 @@ Non-obvious decisions and gotchas not derivable from reading the code:
 
 - **Async in sync Flask**: Agent functions are async but Flask handlers are sync. Uses `asyncio.run()` as bridge.
 
-- **Content-driven flashcard count**: The count slider was removed because users shouldn't have to guess how many items exist in their materials. The agent now generates one flashcard per matching item found in search results — the same exhaustive behavior as the chat agent when asked "What terms do I need to know?".
+- **Flashcard generation pipeline**: No agent loop — the entire pipeline is deterministic Python code calling the OpenAI API directly. Steps: (1) LLM intent parse via structured output, (2) parallel broad searches with `asyncio.gather`, (3) direct structured output call for flashcard generation, (4) post-processing (exact dedup → fuzzy dedup → category filter). This eliminated the biggest performance bottleneck (agent processing the full context twice).
 
-- **Category filtering (post-processing)**: When users request specific categories (e.g., "people and artists"), a second structured output call classifies each flashcard term and removes non-matching items. Uses **fail-open logic**: only cards explicitly marked `matches=false` are removed; cards the classifier skips are kept. This is more reliable than prompt-engineering the agent to self-filter, because the agent's exhaustiveness instructions ("generate every item") conflict with category restrictions.
+- **LLM intent parsing**: Replaces hardcoded keyword detection (`wants_terms`, `wants_people`, `wants_artworks`) with a single structured output call that extracts the user's category as free text. Domain-agnostic — works for "places", "key vocabulary", "theorems", etc. Returns `user_category`, `is_specific_category`, and `search_queries`.
 
-- **Flashcard generation cancellation**: Uses `threading.Event` in `run_agent.py` (not `asyncio.Event`, because Flask runs sync in a separate thread from the asyncio event loop). The flag is checked at the top of each agent loop iteration. Client-side uses `AbortController` on the fetch + a `POST /api/flashcards/cancel` endpoint. The generate/cancel buttons swap visibility during generation.
+- **Fuzzy deduplication**: Uses `rapidfuzz.fuzz.ratio` (80% threshold) + substring containment to merge near-duplicates like "Jan van Eyck" / "Van Eyck". Keeps the longer/more complete term. Runs after exact case-insensitive dedup, before category filter.
+
+- **Category filtering (post-processing)**: When users request specific categories (e.g., "people and artists"), a structured output call classifies each flashcard term and removes non-matching items. Uses **strict logic**: "when in doubt, return matches=false" — better to exclude a borderline item than include something irrelevant.
+
+- **Flashcard generation cancellation**: Uses `threading.Event` from `run_agent.py` (not `asyncio.Event`, because Flask runs sync in a separate thread from the asyncio event loop). The flag is checked at 3 pipeline stages: after intent parse, after search, after structured output generation. Client-side uses `AbortController` on the fetch + a `POST /api/flashcards/cancel` endpoint. The generate/cancel buttons swap visibility during generation.
 
 - **Delete flashcard preserves set selection**: `deleteFlashcard()` saves `currentSetId` before calling `loadFlashcardSets()` (which resets to "All sets"), then re-selects the saved set after the reload completes.
 
